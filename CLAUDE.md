@@ -38,12 +38,14 @@ gofmt -l .
 ./scripts/test.sh        # Integration tests (logs to scripts/run-history/)
 ./scripts/reset.sh       # Truncate all tables (keep schema)
 ./scripts/nuke.sh        # Destroy DB volume + recreate from scratch
+./scripts/vpn.sh         # VPN up|down|status|test (mullvad-exclude + openconnect)
 ```
 
 ## Project Layout
 
 ```
 cmd/server/main.go                  # Entrypoint: config, DB, migrations, HTTP server
+cmd/enettest/main.go                # SYSPRO e.net connectivity test (logon/logoff cycle)
 internal/
   model/order.go                    # Domain types: Order, OrderLine, WebhookEvent
   store/
@@ -52,6 +54,7 @@ internal/
     order.go                        # WebhookExists, CreateOrder (transactional)
     migrations/
       001_initial_schema.up.sql     # webhook_events, orders, order_lines tables
+      001_initial_schema.down.sql   # Drop tables
   syspro/
     client.go                       # Client interface + enetClient (logon/transaction/logoff)
     xml.go                          # SORTOI XML builder (sortoiParams, sortoiDocument)
@@ -71,7 +74,9 @@ scripts/
   test.sh                           # Integration tests (10 scenarios)
   reset.sh                          # Truncate tables
   nuke.sh                           # Destroy + recreate DB
+  vpn.sh                            # Rectella VPN connect/disconnect (mullvad-exclude + openconnect)
   run-history/                      # Timestamped test run logs (gitignored)
+docs/                               # Reference docs: emails, SOW, SYSPRO training (not code)
 docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 .env                                # Local config (gitignored)
 .env.example                        # Template
@@ -89,7 +94,8 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 ### Not Yet Built
 
 - Batch processor (queue → SYSPRO submission)
-- SYSPRO e.net client wired to batch processor (SORTOI — built, not yet called)
+- SYSPRO e.net client wired to batch processor (SORTOI — built, not yet called). Reuse one login session for all orders in a batch.
+- Gift card filtering (webhook handler needs updating to recognise and skip gift card items)
 - Stock sync (SYSPRO SQL → Shopify inventory API)
 - Shipment/fulfilment feedback
 - Order cancellation handler
@@ -104,6 +110,8 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 
 ## Key Design Rules
 
+- **SORTOI batching**: Send one order at a time, but reuse the same login session. Log in once, send all orders one after another, log off once.
+- **Gift cards**: Shopify marks gift card items with `gift_card: true`. These don't exist in SYSPRO — skip them. If the whole order is gift cards, skip the order.
 - **Stage-then-process**: Never call SYSPRO from a webhook handler. Persist first, process async.
 - **Single customer**: All orders → `WEBS01`. No multi-customer logic.
 - **Batch processing**: Orders submitted to SYSPRO on a schedule, not per-webhook. Business object is **SORTOI** (sales order transaction import).
@@ -142,6 +150,11 @@ DATABASE_URL              # PostgreSQL connection string
 STOCK_SYNC_INTERVAL       # Default 15m
 BATCH_INTERVAL            # Default 5m
 LOG_LEVEL                 # debug/info/warn/error
+
+# Operator-only (not consumed by service, documented for setup)
+VPN_HOST                  # Cisco AnyConnect host
+VPN_USERNAME              # VPN username
+VPN_PASSWORD              # VPN password
 ```
 
 ## Phase 1 Scope Boundaries
@@ -173,10 +186,28 @@ LOG_LEVEL                 # debug/info/warn/error
 - **Target go-live**: 31 March 2026
 - **Hypercare**: Four weeks post go-live
 
+## SYSPRO Reference Docs
+
+Local path: `~/Documents/Syspro/` — not committed to repo (proprietary, large PDFs).
+
+Key docs for this project:
+- `sales-orders-reference-guide.pdf` — Sales Order Entry, line types (stocked/non-stocked/freight/misc), SORTOI fields
+- `SYSPRO e.net Solutions Support Training Guide - SYSPRO 8.pdf` — e.net architecture, business objects, logon process, XML structure
+- `trade-promotions-reference-guide.pdf` — Trade Promotions pricing (Sarah's approach)
+- `inventory-control-reference-guide.pdf` — Stock codes, warehouses (stock sync)
+- `general-ledger-integration-reference-guide.pdf` — GL codes (gift card liability)
+
+### SORTOI XML Notes
+
+- Stocked lines: `<StockLine>` with `<StockCode>`, `<OrderQty>`, `<Price>`
+- Non-stocked lines: `<NonStockedLine>` with `<NStockCode>`, `<NStockDes>`, `<NOrderQty>`, `<NPrice>`, `<NProductClass>`
+- Parameters: `<SalesOrders><Parameters>` with `<IgnoreWarnings>`, `<AlwaysUsePriceEntered>`, `<AllowZeroPrice>`
+- Session GUID from `/Logon` must be supplied as `UserId` on every `/Transaction` call
+
 ## Environment Notes
 
 - Arch Linux (Omarchy) + Hyprland
-- Git default branch `master`, remote: `codeberg.org/speeder091/rectella-shopify-service`
+- Git default branch `master`, remote: `github.com/coldwinter1017/rectella-shopify-service` (private)
 - Docker `network_mode: host` required — Docker bridge port mapping broken on kernel 6.18+ with UFW
 
 ## MCP Servers

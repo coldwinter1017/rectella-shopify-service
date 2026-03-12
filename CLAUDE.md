@@ -101,7 +101,7 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 - Batch processor (queue → SYSPRO submission)
 - SYSPRO e.net client wired to batch processor (SORTOI — built, not yet called). Reuse one login session for all orders in a batch.
 - Gift card filtering (webhook handler needs updating to recognise and skip gift card items)
-- Stock sync (SYSPRO SQL → Shopify inventory API)
+- Stock sync (SYSPRO e.net Query → Shopify inventory API)
 - Shipment/fulfilment feedback
 - Order cancellation handler
 
@@ -110,7 +110,7 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 - **Go 1.26.0** (mise, `~/Work/.mise.toml`)
 - **PostgreSQL 16** (Docker, network_mode: host)
 - **pgx/v5** — only external dependency
-- **SYSPRO 8**: e.net SOAP on `RIL-APP01`, SQL Server on `RIL-DB01`
+- **SYSPRO 8**: e.net NetTcp:31001 (read/write) + REST:40000 (read) on `RIL-APP01`
 - **Shopify**: Admin API + webhooks
 
 ## Key Design Rules
@@ -172,6 +172,14 @@ VPN_PASSWORD              # VPN password
 - **App Server**: `RIL-APP01` (e.net SOAP)
 - **DB Server**: `RIL-DB01` (SQL Server)
 - **Managed IT**: NCS (`helpdesk@ncs.cloud`, ticket #44257)
+
+## Deployment (Production)
+
+- **Platform**: Azure Container Apps (single Go binary as Docker container)
+- **Database**: Azure Database for PostgreSQL Flexible Server
+- **Connectivity**: Azure VPN Gateway (Basic) → Rectella Meraki (site-to-site)
+- **Cost estimate**: ~£55–75/month (Rectella's Azure subscription)
+- **Constraints doc**: See `docs/project-constraints.md` for full deployment architecture
 
 ## Stakeholders
 

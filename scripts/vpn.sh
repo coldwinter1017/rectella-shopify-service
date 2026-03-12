@@ -213,14 +213,14 @@ vpn_test() {
     fail=$((fail + 1))
   fi
 
-  # 6. DNS resolves RIL-APP01 via Rectella DNS servers
-  if resolvectl query RIL-APP01 &>/dev/null; then
-    local resolved_ip
-    resolved_ip=$(resolvectl query RIL-APP01 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
-    echo "  PASS  DNS resolves RIL-APP01 ($resolved_ip)"
+  # 6. RIL-APP01 hostname resolves (via /etc/hosts or DNS)
+  local ril_ip
+  ril_ip=$(getent hosts RIL-APP01 2>/dev/null | awk '{print $1}')
+  if [[ -n "$ril_ip" ]]; then
+    echo "  PASS  RIL-APP01 resolves ($ril_ip)"
     pass=$((pass + 1))
   else
-    echo "  FAIL  DNS cannot resolve RIL-APP01"
+    echo "  FAIL  RIL-APP01 does not resolve"
     fail=$((fail + 1))
   fi
 

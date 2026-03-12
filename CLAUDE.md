@@ -38,7 +38,9 @@ gofmt -l .
 ./scripts/test.sh        # Integration tests (logs to scripts/run-history/)
 ./scripts/reset.sh       # Truncate all tables (keep schema)
 ./scripts/nuke.sh        # Destroy DB volume + recreate from scratch
-./scripts/vpn.sh         # VPN up|down|status|test (mullvad-exclude + openconnect)
+./scripts/vpn.sh         # VPN up|down|status|test|fix-hosts (mullvad-exclude + openconnect)
+./scripts/vpn-monitor.sh # Self-healing VPN health check (run via cron or manually)
+./scripts/probe-enet.sh  # Probe RIL-APP01 for e.net port (run once, VPN required)
 ```
 
 ## Project Layout
@@ -75,6 +77,8 @@ scripts/
   reset.sh                          # Truncate tables
   nuke.sh                           # Destroy + recreate DB
   vpn.sh                            # Rectella VPN connect/disconnect (mullvad-exclude + openconnect)
+  vpn-monitor.sh                    # Self-healing VPN health monitor (6 checks, auto-heals 4)
+  probe-enet.sh                     # e.net port discovery (candidate port probing)
   run-history/                      # Timestamped test run logs (gitignored)
 docs/                               # Reference docs: emails, SOW, SYSPRO training (not code)
 docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
@@ -88,8 +92,9 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 - **Idempotency**: Two layers — `WebhookExists` check + `ErrDuplicateWebhook` sentinel on PG unique violation (handles race conditions)
 - **Database**: PostgreSQL with embedded migrations, connection pooling (pgx/v5)
 - **Health endpoints**: `GET /health` (DB ping), `GET /ready`
-- **SYSPRO e.net client** (`internal/syspro/`): `Client` interface, `enetClient` (logon/transaction/logoff), SORTOI XML builder (`sortoiParams`, `sortoiDocument`); 13 tests
-- **Tests**: 29 unit tests (webhook handler + HMAC + SYSPRO client + XML builder), integration test script
+- **SYSPRO e.net client** (`internal/syspro/`): `Client` interface, `enetClient` (logon/transaction/logoff), SORTOI XML builder; 13 tests
+- **VPN tooling** (`scripts/`): `vpn.sh` (connect/disconnect/test with Mullvad coexistence), `vpn-monitor.sh` (self-healing health monitor), DNS routing fix, managed `/etc/hosts` entries for RIL-APP01/RIL-DB01
+- **Tests**: 31 unit tests (webhook handler + HMAC + SYSPRO client + XML builder), integration test script
 
 ### Not Yet Built
 
@@ -102,7 +107,7 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 
 ## Tech Stack
 
-- **Go 1.25.7** (mise, `~/Work/.mise.toml`)
+- **Go 1.26.0** (mise, `~/Work/.mise.toml`)
 - **PostgreSQL 16** (Docker, network_mode: host)
 - **pgx/v5** — only external dependency
 - **SYSPRO 8**: e.net SOAP on `RIL-APP01`, SQL Server on `RIL-DB01`
@@ -111,7 +116,7 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 ## Key Design Rules
 
 - **SORTOI batching**: Send one order at a time, but reuse the same login session. Log in once, send all orders one after another, log off once.
-- **Gift cards**: Shopify marks gift card items with `gift_card: true`. These don't exist in SYSPRO — skip them. If the whole order is gift cards, skip the order.
+- **Gift cards**: Multi-purpose gift cards, zero VAT. Purchase: non-stocked line, positive amount, Gift Card Liability GL code. Redemption: non-stocked line, negative amount, same GL code. Uses `<NonStockedLine>` in SORTOI. (Sarah's proposal — pending Liz approval.)
 - **Stage-then-process**: Never call SYSPRO from a webhook handler. Persist first, process async.
 - **Single customer**: All orders → `WEBS01`. No multi-customer logic.
 - **Batch processing**: Orders submitted to SYSPRO on a schedule, not per-webhook. Business object is **SORTOI** (sales order transaction import).
@@ -208,7 +213,7 @@ Key docs for this project:
 
 - Arch Linux (Omarchy) + Hyprland
 - Git default branch `master`, remote: `github.com/coldwinter1017/rectella-shopify-service` (private)
-- Docker `network_mode: host` required — Docker bridge port mapping broken on kernel 6.18+ with UFW
+- Docker `network_mode: host` required — Docker bridge port mapping broken on kernel 6.18+ with nftables
 
 ## MCP Servers
 

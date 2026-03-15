@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# NOTE: The authoritative integration tests are now Go tests in internal/integration/.
+# Run them with: go test -tags integration ./... -count=1
+# This script remains as a quick manual smoke test against a running instance.
+
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 SECRET="${SHOPIFY_WEBHOOK_SECRET:-local-test-secret}"
 

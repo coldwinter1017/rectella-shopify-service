@@ -38,14 +38,15 @@ go run ./cmd/server
 
 # Build / test / lint
 go build ./...
-go test ./...
+go test ./...                              # unit tests only (fast, no Docker)
+go test -tags integration ./... -count=1   # unit + integration (spins up Postgres container)
 go vet ./...
 gofmt -l .
 
 # Helper scripts
 ./scripts/run.sh         # Start PostgreSQL + load .env + run service
-./scripts/check.sh       # Build + vet + fmt + unit tests
-./scripts/test.sh        # Integration tests (logs to scripts/run-history/)
+./scripts/check.sh       # Build + vet + fmt + all tests (unit + integration)
+./scripts/test.sh        # Manual smoke test against running instance (legacy)
 ./scripts/reset.sh       # Truncate all tables (keep schema)
 ./scripts/nuke.sh        # Destroy DB volume + recreate from scratch
 ./scripts/vpn.sh         # VPN up|down|status|test|fix-hosts (mullvad-exclude + openconnect)
@@ -84,11 +85,14 @@ internal/
     handler_test.go                 # 11 table-driven handler tests (mock store)
     verify_test.go                  # 5 table-driven HMAC tests
     testdata/order_create.json      # Realistic BBQ order fixture
+  integration/
+    testhelper_test.go              # Shared test setup: Postgres container, mock SYSPRO, HTTP server
+    pipeline_test.go                # 16 integration tests: webhook, pipeline, orders, health
 config/config.go                    # Env var loading + validation
 scripts/
   run.sh                            # Start PostgreSQL + service
-  check.sh                          # Build + vet + fmt + unit tests
-  test.sh                           # Integration tests (10 scenarios)
+  check.sh                          # Build + vet + fmt + all tests (unit + integration)
+  test.sh                           # Manual smoke test against running instance (legacy)
   reset.sh                          # Truncate tables
   nuke.sh                           # Destroy + recreate DB
   vpn.sh                            # Rectella VPN connect/disconnect (mullvad-exclude + openconnect)
@@ -111,7 +115,7 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 - **VPN tooling** (`scripts/`): `vpn.sh` (connect/disconnect/test with Mullvad coexistence), `vpn-monitor.sh` (self-healing health monitor), DNS routing fix, managed `/etc/hosts` entries for RIL-APP01/RIL-DB01
 - **Batch processor** (`internal/batch/`): Polls for pending orders, opens single SYSPRO session per batch, submits sequentially. Business errors mark `failed` and continue; infra errors stop batch. Dead-letters after 3 attempts. Single-flight guard prevents overlapping batches.
 - **GET /orders?status=** endpoint: Operations visibility into order statuses
-- **Tests**: 43 unit tests (webhook handler + HMAC + SYSPRO client + XML builder + session + batch processor), integration test script
+- **Tests**: 43 unit tests (webhook handler + HMAC + SYSPRO client + XML builder + session + batch processor) + 16 Go integration tests (`internal/integration/`, `//go:build integration`) covering full pipeline: webhook → DB → batch → orders endpoint. Uses `testcontainers-go` with real Postgres. Run with `go test -tags integration ./...`
 
 ### Not Yet Built
 

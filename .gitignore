@@ -29,3 +29,7 @@ scripts/run-history/
 
 # Local network reference (contains internal IPs, not for repo)
 docs/network-setup.md
+
+# PromptFoo — local dev tool, not committed
+promptfoo.yaml
+.promptfoo/

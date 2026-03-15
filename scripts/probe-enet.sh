@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# Probe RIL-APP01 for SYSPRO e.net REST endpoints.
-# Tries all candidate ports x all known URL patterns.
+# Probe RIL-APP01 for SYSPRO e.net endpoints.
+# 31001 = NetTcp (business objects, read/write)
+# 40000 = REST HTTP (read-only backup)
 # Read-only — modifies nothing on this machine.
 #
 # Usage: ./scripts/probe-enet.sh
@@ -13,7 +14,7 @@ HOST="192.168.3.150"
 TIMEOUT=5
 DELAY=3
 
-PORTS=(80 443 8082 30110 30180 30181 30190)
+PORTS=(31001 40000)
 PATHS=("SYSPROWCFService/Rest" "saborest" "SYSPRORestApi" "")
 
 echo "=== e.net Port Discovery ==="
@@ -72,35 +73,6 @@ for port in "${open_ports[@]}"; do
   done
 done
 
-# Also try HTTPS on 443
-if printf '%s\n' "${open_ports[@]}" | grep -q "^443$"; then
-  echo ""
-  echo "--- HTTPS probing (port 443) ---"
-  for path in "${PATHS[@]}"; do
-    if [[ -n $path ]]; then
-      target="https://$HOST:443/$path/Logon"
-    else
-      target="https://$HOST:443/Logon"
-    fi
-
-    result=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$TIMEOUT" -k "$target" 2>/dev/null || echo "000")
-
-    if [[ $result == "000" ]]; then
-      label="TIMEOUT/RESET"
-    elif [[ $result == "200" || $result == "405" ]]; then
-      label="FOUND"
-      found+=("$target (HTTP $result)")
-    elif [[ $result == "404" ]]; then
-      label="NOT FOUND"
-    else
-      label="HTTP $result"
-    fi
-
-    printf "  %-6s  %s  %s\n" "$result" "$label" "$target"
-    sleep "$DELAY"
-  done
-fi
-
 echo ""
 
 # For any hits, fetch response body for inspection
@@ -122,10 +94,10 @@ if (( ${#found[@]} > 0 )); then
     sleep "$DELAY"
   done
 else
-  echo "No e.net endpoints found on any port/path combination."
+  echo "No e.net endpoints found on ports 31001/40000."
   echo ""
   echo "Next steps:"
-  echo "  1. Ask Reece Taylor / NCS (ticket #44257) which port e.net is on"
-  echo "  2. Check if e.net service is running: get someone to check IIS on RIL-APP01"
-  echo "  3. Try: http://RIL-APP01:30000/saborest from a machine ON the Rectella LAN"
+  echo "  1. Confirm with Reece Taylor that ports 31001 and 40000 are open on RIL-APP01"
+  echo "  2. Check e.net Communications Load Balancer config (SYSPROWCFServiceConfig.xml)"
+  echo "  3. Verify e.net service is running on RIL-APP01"
 fi

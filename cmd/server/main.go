@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"codeberg.org/speeder091/rectella-shopify-service/config"
+	"codeberg.org/speeder091/rectella-shopify-service/internal/batch"
+	"codeberg.org/speeder091/rectella-shopify-service/internal/model"
 	"codeberg.org/speeder091/rectella-shopify-service/internal/store"
 	"codeberg.org/speeder091/rectella-shopify-service/internal/syspro"
 	"codeberg.org/speeder091/rectella-shopify-service/internal/webhook"
@@ -74,8 +76,8 @@ func run() error {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 	})
 
-	// Instantiate SYSPRO e.net client (used by the batch processor in phase 2).
-	_ = syspro.NewEnetClient(
+	// Instantiate SYSPRO e.net client.
+	sysproClient := syspro.NewEnetClient(
 		cfg.SysproEnetURL,
 		cfg.SysproOperator,
 		cfg.SysproPassword,
@@ -83,9 +85,75 @@ func run() error {
 		logger,
 	)
 
+	// Start batch processor.
+	batchProc := batch.New(db, sysproClient, cfg.BatchInterval, logger)
+	batchCtx, batchCancel := context.WithCancel(ctx)
+	defer batchCancel()
+	go batchProc.Run(batchCtx)
+
 	// Register webhook handlers.
 	wh := webhook.NewHandler(db, cfg.ShopifyWebhookSecret, logger)
 	wh.Register(mux)
+
+	// Orders visibility endpoint.
+	validStatuses := map[string]bool{
+		"pending": true, "processing": true, "submitted": true,
+		"failed": true, "dead_letter": true, "cancelled": true,
+	}
+	mux.HandleFunc("GET /orders", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		statusFilter := r.URL.Query().Get("status")
+		if statusFilter == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "status query parameter required"})
+			return
+		}
+		if !validStatuses[statusFilter] {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid status value"})
+			return
+		}
+
+		orders, err := db.ListOrdersByStatus(r.Context(), model.OrderStatus(statusFilter))
+		if err != nil {
+			slog.Error("listing orders", "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "internal error"})
+			return
+		}
+
+		type orderResponse struct {
+			ID              int64             `json:"id"`
+			ShopifyOrderID  int64             `json:"shopify_order_id"`
+			OrderNumber     string            `json:"order_number"`
+			Status          model.OrderStatus `json:"status"`
+			CustomerAccount string            `json:"customer_account"`
+			Attempts        int               `json:"attempts"`
+			LastError       string            `json:"last_error,omitempty"`
+			OrderDate       string            `json:"order_date"`
+			CreatedAt       string            `json:"created_at"`
+			UpdatedAt       string            `json:"updated_at"`
+		}
+
+		resp := make([]orderResponse, 0, len(orders))
+		for _, o := range orders {
+			resp = append(resp, orderResponse{
+				ID:              o.ID,
+				ShopifyOrderID:  o.ShopifyOrderID,
+				OrderNumber:     o.OrderNumber,
+				Status:          o.Status,
+				CustomerAccount: o.CustomerAccount,
+				Attempts:        o.Attempts,
+				LastError:       o.LastError,
+				OrderDate:       o.OrderDate.Format("2006-01-02T15:04:05Z07:00"),
+				CreatedAt:       o.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+				UpdatedAt:       o.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			})
+		}
+
+		json.NewEncoder(w).Encode(resp)
+	})
 
 	srv := &http.Server{
 		Addr:         ":8080",
@@ -112,6 +180,7 @@ func run() error {
 	select {
 	case sig := <-sigCh:
 		slog.Info("received shutdown signal", "signal", sig)
+		batchCancel()
 	case err := <-errCh:
 		return fmt.Errorf("server error: %w", err)
 	}

@@ -29,7 +29,7 @@ func main() {
 func run() error {
 	baseURL := requireEnv("SYSPRO_ENET_URL")
 	operator := requireEnv("SYSPRO_OPERATOR")
-	password := requireEnv("SYSPRO_PASSWORD")
+	password := os.Getenv("SYSPRO_PASSWORD") // blank password is valid
 	companyID := requireEnv("SYSPRO_COMPANY_ID")
 
 	baseURL = strings.TrimRight(baseURL, "/")

@@ -1,5 +1,15 @@
 # CLAUDE.md
 
+## Session Start Protocol
+
+At the start of every session, before any work begins:
+
+1. **Check tooling**: Verify MCP servers are connected, plugins are loaded, skills are available. Report any gaps.
+2. **Check skills**: Review available superpowers skills — use brainstorming before creative work, TDD before implementation, debugging before fixing, writing-plans before multi-step tasks.
+3. **Check approach**: Use modern, up-to-date best practice for the current date. If a better tool, technique, or Claude Code feature exists, use it. If unsure, research first.
+4. **Guide the developer**: Sebastian is learning Claude Code techniques alongside building software. Explain *why* you're using a particular approach, not just *what*. Surface better ways of doing things proactively.
+5. **Quality over speed, but both**: Write production-grade code from the start. Use code review after implementation. Catch issues early, not in production.
+
 ## Project Overview
 
 **Rectella Shopify Service** — middleware bridging Shopify with SYSPRO 8 ERP for Rectella International. Go + PostgreSQL.
@@ -49,18 +59,23 @@ gofmt -l .
 cmd/server/main.go                  # Entrypoint: config, DB, migrations, HTTP server
 cmd/enettest/main.go                # SYSPRO e.net connectivity test (logon/logoff cycle)
 internal/
-  model/order.go                    # Domain types: Order, OrderLine, WebhookEvent
+  batch/
+    processor.go                    # Batch processor: polling loop, SYSPRO submission, error handling
+    processor_test.go               # 7 tests: empty batch, success, business/infra errors, dead-letter, Run
+  model/order.go                    # Domain types: Order, OrderLine, OrderWithLines, WebhookEvent
   store/
     store.go                        # DB connection pool (pgxpool)
     migrate.go                      # Embedded SQL migrations
-    order.go                        # WebhookExists, CreateOrder (transactional)
+    order.go                        # WebhookExists, CreateOrder, FetchPendingOrders, UpdateOrderStatus, ListOrdersByStatus
     migrations/
       001_initial_schema.up.sql     # webhook_events, orders, order_lines tables
       001_initial_schema.down.sql   # Drop tables
   syspro/
     client.go                       # Client interface + enetClient (logon/transaction/logoff)
+    session.go                      # Session interface + enetSession (batched order submission)
     xml.go                          # SORTOI XML builder (sortoiParams, sortoiDocument)
     client_test.go                  # httptest-based client tests
+    session_test.go                 # Session lifecycle tests (open/submit/reuse/close)
     xml_test.go                     # XML builder unit tests
   webhook/
     handler.go                      # POST /webhooks/orders/create — OrderStore interface
@@ -94,13 +109,13 @@ docker-compose.yml                  # PostgreSQL 16 (network_mode: host)
 - **Health endpoints**: `GET /health` (DB ping), `GET /ready`
 - **SYSPRO e.net client** (`internal/syspro/`): `Client` interface, `enetClient` (logon/transaction/logoff), SORTOI XML builder; 13 tests
 - **VPN tooling** (`scripts/`): `vpn.sh` (connect/disconnect/test with Mullvad coexistence), `vpn-monitor.sh` (self-healing health monitor), DNS routing fix, managed `/etc/hosts` entries for RIL-APP01/RIL-DB01
-- **Tests**: 31 unit tests (webhook handler + HMAC + SYSPRO client + XML builder), integration test script
+- **Batch processor** (`internal/batch/`): Polls for pending orders, opens single SYSPRO session per batch, submits sequentially. Business errors mark `failed` and continue; infra errors stop batch. Dead-letters after 3 attempts. Single-flight guard prevents overlapping batches.
+- **GET /orders?status=** endpoint: Operations visibility into order statuses
+- **Tests**: 43 unit tests (webhook handler + HMAC + SYSPRO client + XML builder + session + batch processor), integration test script
 
 ### Not Yet Built
 
-- Batch processor (queue → SYSPRO submission)
-- SYSPRO e.net client wired to batch processor (SORTOI — built, not yet called). Reuse one login session for all orders in a batch.
-- Gift card filtering (webhook handler needs updating to recognise and skip gift card items)
+- Gift card handling (non-stocked lines in SORTOI — pending Liz Buckley finance approval)
 - Stock sync (SYSPRO e.net Query → Shopify inventory API)
 - Shipment/fulfilment feedback
 - Order cancellation handler

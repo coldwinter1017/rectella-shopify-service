@@ -14,10 +14,17 @@ import (
 	"codeberg.org/speeder091/rectella-shopify-service/internal/model"
 )
 
+// Session represents an open SYSPRO e.net session that can submit multiple
+// orders before being closed. Use Client.OpenSession to create one.
+type Session interface {
+	SubmitOrder(ctx context.Context, order model.Order, lines []model.OrderLine) (*SalesOrderResult, error)
+	Close(ctx context.Context) error
+}
+
 // Client is the interface the batch processor uses to submit orders to SYSPRO.
-// It is a single-method interface so callers can use a mock in tests without VPN.
 type Client interface {
 	SubmitSalesOrder(ctx context.Context, order model.Order, lines []model.OrderLine) (*SalesOrderResult, error)
+	OpenSession(ctx context.Context) (Session, error)
 }
 
 // SalesOrderResult carries the outcome of a SORTOI transaction.

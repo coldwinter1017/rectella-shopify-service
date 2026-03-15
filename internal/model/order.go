@@ -58,6 +58,12 @@ type OrderLine struct {
 	Tax       float64
 }
 
+// OrderWithLines pairs an order with its line items for batch processing.
+type OrderWithLines struct {
+	Order Order
+	Lines []OrderLine
+}
+
 type WebhookEvent struct {
 	ID         int64
 	WebhookID  string

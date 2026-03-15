@@ -45,7 +45,7 @@ func Load() (*Config, error) {
 
 		SysproEnetURL:   get("SYSPRO_ENET_URL"),
 		SysproOperator:  get("SYSPRO_OPERATOR"),
-		SysproPassword:  get("SYSPRO_PASSWORD"),
+		SysproPassword:  os.Getenv("SYSPRO_PASSWORD"), // blank password is valid
 		SysproCompanyID: get("SYSPRO_COMPANY_ID"),
 
 		DatabaseURL: get("DATABASE_URL"),

@@ -103,3 +103,134 @@ func (db *DB) CreateOrder(ctx context.Context, event model.WebhookEvent, order m
 
 	return nil
 }
+
+// FetchPendingOrders returns up to limit orders with status 'pending', oldest first,
+// along with their line items.
+func (db *DB) FetchPendingOrders(ctx context.Context, limit int) ([]model.OrderWithLines, error) {
+	rows, err := db.Pool.Query(ctx,
+		`SELECT id, shopify_order_id, order_number, status, customer_account,
+			ship_first_name, ship_last_name, ship_address1, ship_address2,
+			ship_city, ship_province, ship_postcode, ship_country,
+			ship_phone, ship_email,
+			payment_reference, payment_amount,
+			raw_payload, attempts, last_error,
+			order_date, created_at, updated_at
+		FROM orders
+		WHERE status = 'pending'
+		ORDER BY created_at ASC
+		LIMIT $1`, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying pending orders: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []model.Order
+	for rows.Next() {
+		var o model.Order
+		if err := rows.Scan(
+			&o.ID, &o.ShopifyOrderID, &o.OrderNumber, &o.Status, &o.CustomerAccount,
+			&o.ShipFirstName, &o.ShipLastName, &o.ShipAddress1, &o.ShipAddress2,
+			&o.ShipCity, &o.ShipProvince, &o.ShipPostcode, &o.ShipCountry,
+			&o.ShipPhone, &o.ShipEmail,
+			&o.PaymentReference, &o.PaymentAmount,
+			&o.RawPayload, &o.Attempts, &o.LastError,
+			&o.OrderDate, &o.CreatedAt, &o.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning order row: %w", err)
+		}
+		orders = append(orders, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating order rows: %w", err)
+	}
+
+	result := make([]model.OrderWithLines, 0, len(orders))
+	for _, o := range orders {
+		lines, err := db.fetchOrderLines(ctx, o.ID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, model.OrderWithLines{Order: o, Lines: lines})
+	}
+
+	return result, nil
+}
+
+func (db *DB) fetchOrderLines(ctx context.Context, orderID int64) ([]model.OrderLine, error) {
+	rows, err := db.Pool.Query(ctx,
+		`SELECT id, order_id, sku, quantity, unit_price, discount, tax
+		FROM order_lines
+		WHERE order_id = $1
+		ORDER BY id`, orderID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying order lines for order %d: %w", orderID, err)
+	}
+	defer rows.Close()
+
+	var lines []model.OrderLine
+	for rows.Next() {
+		var l model.OrderLine
+		if err := rows.Scan(&l.ID, &l.OrderID, &l.SKU, &l.Quantity, &l.UnitPrice, &l.Discount, &l.Tax); err != nil {
+			return nil, fmt.Errorf("scanning order line: %w", err)
+		}
+		lines = append(lines, l)
+	}
+	return lines, rows.Err()
+}
+
+// UpdateOrderStatus sets the status, attempts count, and last error for an order.
+func (db *DB) UpdateOrderStatus(ctx context.Context, orderID int64, status model.OrderStatus, attempts int, lastError string) error {
+	tag, err := db.Pool.Exec(ctx,
+		`UPDATE orders
+		SET status = $2, attempts = $3, last_error = $4, updated_at = NOW()
+		WHERE id = $1`,
+		orderID, string(status), attempts, lastError,
+	)
+	if err != nil {
+		return fmt.Errorf("updating order %d status: %w", orderID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("order %d not found", orderID)
+	}
+	return nil
+}
+
+// ListOrdersByStatus returns orders matching the given status, newest first.
+func (db *DB) ListOrdersByStatus(ctx context.Context, status model.OrderStatus) ([]model.Order, error) {
+	rows, err := db.Pool.Query(ctx,
+		`SELECT id, shopify_order_id, order_number, status, customer_account,
+			ship_first_name, ship_last_name, ship_address1, ship_address2,
+			ship_city, ship_province, ship_postcode, ship_country,
+			ship_phone, ship_email,
+			payment_reference, payment_amount,
+			raw_payload, attempts, last_error,
+			order_date, created_at, updated_at
+		FROM orders
+		WHERE status = $1
+		ORDER BY created_at DESC`, string(status),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying orders by status: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []model.Order
+	for rows.Next() {
+		var o model.Order
+		if err := rows.Scan(
+			&o.ID, &o.ShopifyOrderID, &o.OrderNumber, &o.Status, &o.CustomerAccount,
+			&o.ShipFirstName, &o.ShipLastName, &o.ShipAddress1, &o.ShipAddress2,
+			&o.ShipCity, &o.ShipProvince, &o.ShipPostcode, &o.ShipCountry,
+			&o.ShipPhone, &o.ShipEmail,
+			&o.PaymentReference, &o.PaymentAmount,
+			&o.RawPayload, &o.Attempts, &o.LastError,
+			&o.OrderDate, &o.CreatedAt, &o.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning order: %w", err)
+		}
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}

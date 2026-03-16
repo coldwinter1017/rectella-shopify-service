@@ -46,7 +46,7 @@ fi
 
 echo ""
 echo "=== go test ==="
-go test ./... -count=1 || failed=1
+go test -tags integration ./... -count=1 || failed=1
 
 echo ""
 if [ "$failed" -eq 0 ]; then

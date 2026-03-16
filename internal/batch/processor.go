@@ -64,14 +64,14 @@ func (p *Processor) tick(ctx context.Context) {
 	}
 	defer p.mu.Unlock()
 
-	if err := p.processBatch(ctx); err != nil {
+	if err := p.ProcessBatch(ctx); err != nil {
 		p.logger.Error("batch processing error", "error", err)
 	}
 }
 
-// processBatch runs a single batch cycle: fetch pending orders, open a SYSPRO
+// ProcessBatch runs a single batch cycle: fetch pending orders, open a SYSPRO
 // session, submit each order, update statuses.
-func (p *Processor) processBatch(ctx context.Context) error {
+func (p *Processor) ProcessBatch(ctx context.Context) error {
 	orders, err := p.store.FetchPendingOrders(ctx, 100)
 	if err != nil {
 		p.logger.Error("fetching pending orders", "error", err)

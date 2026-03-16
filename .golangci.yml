@@ -19,12 +19,12 @@ linters:
       excludes:
         - G101  # false positive on test constants
         - G104  # covered by errcheck (avoid duplicate)
-issues:
-  exclude-dirs:
-    - docs
-    - scripts
-  exclude-rules:
-    # defer close in tests — best-effort cleanup
-    - path: _test\.go
-      linters: [errcheck]
-      source: "defer .+\\.Close\\("
+  exclusions:
+    paths:
+      - docs
+      - scripts
+    rules:
+      # defer close in tests — best-effort cleanup
+      - path: _test\.go
+        linters: [errcheck]
+        source: "defer .+\\.Close\\("

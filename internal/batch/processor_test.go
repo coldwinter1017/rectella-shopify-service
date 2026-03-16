@@ -141,7 +141,7 @@ func TestProcessBatch_NoPendingOrders(t *testing.T) {
 	mc := &mockClient{session: &mockSession{}}
 	p := New(ms, mc, time.Minute, testLogger())
 
-	err := p.processBatch(context.Background())
+	err := p.ProcessBatch(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestProcessBatch_SingleOrderSuccess(t *testing.T) {
 	mc := &mockClient{session: session}
 	p := New(ms, mc, time.Minute, testLogger())
 
-	err := p.processBatch(context.Background())
+	err := p.ProcessBatch(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestProcessBatch_BusinessError_ContinuesBatch(t *testing.T) {
 	mc := &mockClient{session: session}
 	p := New(ms, mc, time.Minute, testLogger())
 
-	err := p.processBatch(context.Background())
+	err := p.ProcessBatch(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestProcessBatch_InfraError_StopsBatch(t *testing.T) {
 	mc := &mockClient{session: session}
 	p := New(ms, mc, time.Minute, testLogger())
 
-	err := p.processBatch(context.Background())
+	err := p.ProcessBatch(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestProcessBatch_InfraError_DeadLetterAfter3(t *testing.T) {
 	mc := &mockClient{session: session}
 	p := New(ms, mc, time.Minute, testLogger())
 
-	err := p.processBatch(context.Background())
+	err := p.ProcessBatch(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestProcessBatch_OpenSessionFailure(t *testing.T) {
 	mc := &mockClient{openErr: errors.New("VPN down")}
 	p := New(ms, mc, time.Minute, testLogger())
 
-	err := p.processBatch(context.Background())
+	err := p.ProcessBatch(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

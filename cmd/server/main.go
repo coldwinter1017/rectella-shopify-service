@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -64,7 +65,7 @@ func run() error {
 		if err := db.Ping(r.Context()); err != nil {
 			slog.Error("health check failed", "error", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy", "error": err.Error()})
+			json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy"})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -95,8 +96,24 @@ func run() error {
 	wh := webhook.NewHandler(db, cfg.ShopifyWebhookSecret, logger)
 	wh.Register(mux)
 
+	// Admin auth check for operations endpoints.
+	requireAdmin := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if cfg.AdminToken != "" {
+				token := r.Header.Get("X-Admin-Token")
+				if subtle.ConstantTimeCompare([]byte(token), []byte(cfg.AdminToken)) != 1 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusUnauthorized)
+					json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+					return
+				}
+			}
+			next(w, r)
+		}
+	}
+
 	// Retry endpoint — move failed/dead-lettered orders back to pending.
-	mux.HandleFunc("POST /orders/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /orders/{id}/retry", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		idStr := r.PathValue("id")
@@ -116,14 +133,14 @@ func run() error {
 
 		slog.Info("order retried", "order_id", orderID)
 		json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
-	})
+	}))
 
 	// Orders visibility endpoint.
 	validStatuses := map[string]bool{
 		"pending": true, "processing": true, "submitted": true,
 		"failed": true, "dead_letter": true, "cancelled": true,
 	}
-	mux.HandleFunc("GET /orders", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /orders", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		statusFilter := r.URL.Query().Get("status")
@@ -171,18 +188,24 @@ func run() error {
 				SysproOrderNumber: o.SysproOrderNumber,
 				Attempts:          o.Attempts,
 				LastError:         o.LastError,
-				OrderDate:       o.OrderDate.Format("2006-01-02T15:04:05Z07:00"),
-				CreatedAt:       o.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-				UpdatedAt:       o.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+				OrderDate:         o.OrderDate.Format("2006-01-02T15:04:05Z07:00"),
+				CreatedAt:         o.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+				UpdatedAt:         o.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			})
 		}
 
 		json.NewEncoder(w).Encode(resp)
-	})
+	}))
+
+	// Wrap mux with middleware: panic recovery → security headers → request logging.
+	var handler http.Handler = mux
+	handler = requestLogging(handler)
+	handler = securityHeaders(handler)
+	handler = panicRecovery(handler)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -228,4 +251,71 @@ func run() error {
 
 	slog.Info("server stopped cleanly")
 	return nil
+}
+
+// panicRecovery catches panics in handlers and returns 500 instead of crashing.
+func panicRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rv := recover(); rv != nil {
+				slog.Error("panic recovered", "panic", rv, "method", r.Method, "path", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{"error": "internal error"})
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// securityHeaders sets standard security response headers.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// requestLogging logs method, path, status, and duration for every request.
+func requestLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sw, r)
+
+		attrs := []any{
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", sw.status,
+			"duration", time.Since(start),
+		}
+		if wid := r.Header.Get("X-Shopify-Webhook-Id"); wid != "" {
+			attrs = append(attrs, "webhook_id", wid)
+		}
+		slog.Info("request", attrs...)
+	})
+}
+
+// statusWriter wraps ResponseWriter to capture the status code.
+type statusWriter struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.status = code
+		w.wroteHeader = true
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+	}
+	return w.ResponseWriter.Write(b)
 }

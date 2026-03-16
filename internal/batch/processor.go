@@ -95,7 +95,13 @@ func (p *Processor) ProcessBatch(ctx context.Context) error {
 		p.logger.Error("opening SYSPRO session", "error", err)
 		return nil
 	}
-	defer session.Close(ctx) //nolint:errcheck // best-effort cleanup
+	defer func() {
+		// Use a fresh context for logoff — the batch context may be cancelled
+		// during shutdown, but we still want SYSPRO to release the session.
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		session.Close(closeCtx) //nolint:errcheck // best-effort cleanup
+	}()
 
 	for _, ow := range orders {
 		if err := p.submitOrder(ctx, session, ow); err != nil {

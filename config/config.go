@@ -20,7 +20,8 @@ type Config struct {
 
 	DatabaseURL string
 
-	Port string
+	Port       string
+	AdminToken string
 
 	StockSyncInterval time.Duration
 	BatchInterval     time.Duration
@@ -58,6 +59,7 @@ func Load() (*Config, error) {
 		port = "8080"
 	}
 	c.Port = port
+	c.AdminToken = os.Getenv("ADMIN_TOKEN")
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %v", missing)

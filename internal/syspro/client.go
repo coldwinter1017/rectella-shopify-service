@@ -94,14 +94,14 @@ func (c *enetClient) SubmitSalesOrder(ctx context.Context, order model.Order, li
 	return parseSORTOIResponse(respXML)
 }
 
-// logon calls POST /Logon and returns the session GUID.
+// logon calls GET /Logon and returns the session GUID.
 func (c *enetClient) logon(ctx context.Context) (string, error) {
-	form := url.Values{
+	params := url.Values{
 		"Operator":         {c.operator},
 		"OperatorPassword": {c.password},
 		"CompanyId":        {c.companyID},
 	}
-	body, err := c.post(ctx, "/Logon", form)
+	body, err := c.get(ctx, "/Logon", params)
 	if err != nil {
 		return "", err
 	}
@@ -117,24 +117,24 @@ func (c *enetClient) logon(ctx context.Context) (string, error) {
 	return guid, nil
 }
 
-// logoff calls POST /Logoff with the session GUID.
+// logoff calls GET /Logoff with the session GUID.
 func (c *enetClient) logoff(ctx context.Context, guid string) error {
-	form := url.Values{
+	params := url.Values{
 		"UserId": {guid},
 	}
-	_, err := c.post(ctx, "/Logoff", form)
+	_, err := c.get(ctx, "/Logoff", params)
 	return err
 }
 
-// transaction calls POST /Transaction and returns the raw XML response body.
+// transaction calls GET /Transaction/Post and returns the raw XML response body.
 func (c *enetClient) transaction(ctx context.Context, guid, businessObject, paramsXML, dataXML string) (string, error) {
-	form := url.Values{
+	params := url.Values{
 		"UserId":         {guid},
 		"BusinessObject": {businessObject},
 		"XmlParameters":  {paramsXML},
 		"XmlIn":          {dataXML},
 	}
-	body, err := c.post(ctx, "/Transaction", form)
+	body, err := c.get(ctx, "/Transaction/Post", params)
 	if err != nil {
 		return "", err
 	}
@@ -146,20 +146,18 @@ func (c *enetClient) transaction(ctx context.Context, guid, businessObject, para
 	return xmlStr, nil
 }
 
-// post is a thin wrapper around http.PostForm that handles URL construction,
-// context propagation, and non-2xx status codes.
-func (c *enetClient) post(ctx context.Context, path string, form url.Values) ([]byte, error) {
-	target := c.baseURL + path
+// get sends a GET request with query parameters and returns the response body.
+func (c *enetClient) get(ctx context.Context, path string, params url.Values) ([]byte, error) {
+	target := c.baseURL + path + "?" + params.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building request for %s: %w", path, err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", path, err)
+		return nil, fmt.Errorf("GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 
@@ -169,7 +167,7 @@ func (c *enetClient) post(ctx context.Context, path string, form url.Values) ([]
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("POST %s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("GET %s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return body, nil

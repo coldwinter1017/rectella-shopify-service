@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -53,12 +52,11 @@ func newFakeEnet(t *testing.T) *fakeEnet {
 	t.Helper()
 	f := &fakeEnet{transactXML: successfulSORTOIResponse}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
+		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		body, _ := io.ReadAll(r.Body)
-		form, _ := url.ParseQuery(string(body))
+		params := r.URL.Query()
 
 		switch r.URL.Path {
 		case "/Logon":
@@ -72,15 +70,15 @@ func newFakeEnet(t *testing.T) *fakeEnet {
 
 		case "/Logoff":
 			f.logoffCalls++
-			if form.Get("UserId") != testGUID {
+			if params.Get("UserId") != testGUID {
 				http.Error(w, "bad UserId", http.StatusBadRequest)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 
-		case "/Transaction":
+		case "/Transaction/Post":
 			f.transactCalls++
-			if form.Get("UserId") != testGUID {
+			if params.Get("UserId") != testGUID {
 				http.Error(w, "bad UserId", http.StatusBadRequest)
 				return
 			}

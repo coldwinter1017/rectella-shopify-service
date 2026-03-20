@@ -66,10 +66,15 @@ func buildSORTOI(order model.Order, lines []model.OrderLine) (string, string, er
 
 	stockLines := make([]sortoiStockLine, len(lines))
 	for i, l := range lines {
+		// Net price: subtract per-unit discount (Shopify sends total discount across all units).
+		netPrice := l.UnitPrice
+		if l.Discount > 0 && l.Quantity > 0 {
+			netPrice -= l.Discount / float64(l.Quantity)
+		}
 		stockLines[i] = sortoiStockLine{
 			StockCode: l.SKU,
 			OrderQty:  l.Quantity,
-			Price:     l.UnitPrice,
+			Price:     netPrice,
 		}
 	}
 

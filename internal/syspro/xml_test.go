@@ -77,9 +77,13 @@ func TestBuildSORTOI_DataXML_StockLines(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"<CustomerPoLine>0001</CustomerPoLine>",
 		"<StockCode>CBBQ0001</StockCode>",
 		"<OrderQty>2</OrderQty>",
+		"<OrderUom>EA</OrderUom>",
 		"<Price>599</Price>",
+		"<PriceUom>EA</PriceUom>",
+		"<CustomerPoLine>0002</CustomerPoLine>",
 		"<StockCode>CBBQ0002</StockCode>",
 		"<OrderQty>1</OrderQty>",
 		"<Price>12.5</Price>",
@@ -119,6 +123,44 @@ func TestBuildSORTOI_SpecialCharsEscaped(t *testing.T) {
 	}
 	if !strings.Contains(dataXML, "&amp;") && !strings.Contains(dataXML, "&#") {
 		t.Errorf("XML should escape & character; got: %s", dataXML)
+	}
+}
+
+func TestBuildSORTOI_DataXML_NetPriceAfterDiscount(t *testing.T) {
+	order := minimalOrder()
+	lines := []model.OrderLine{
+		// 10% off: £20 unit price, £4 total discount across 2 units = £18/unit net
+		{SKU: "CBBQ0001", Quantity: 2, UnitPrice: 20.00, Discount: 4.00},
+		// No discount: price unchanged
+		{SKU: "CBBQ0002", Quantity: 1, UnitPrice: 12.50, Discount: 0},
+		// Full line discount on single unit: £5 off £15 = £10 net
+		{SKU: "CBBQ0003", Quantity: 1, UnitPrice: 15.00, Discount: 5.00},
+	}
+
+	_, dataXML, err := buildSORTOI(order, lines)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Net prices: 18.00, 12.50, 10.00
+	for _, want := range []string{
+		"<Price>18</Price>",
+		"<Price>12.5</Price>",
+		"<Price>10</Price>",
+	} {
+		if !strings.Contains(dataXML, want) {
+			t.Errorf("data XML missing net price %q\ngot: %s", want, dataXML)
+		}
+	}
+
+	// Gross prices should NOT appear
+	for _, absent := range []string{
+		"<Price>20</Price>",
+		"<Price>15</Price>",
+	} {
+		if strings.Contains(dataXML, absent) {
+			t.Errorf("data XML should contain net price, not gross; found %q\ngot: %s", absent, dataXML)
+		}
 	}
 }
 

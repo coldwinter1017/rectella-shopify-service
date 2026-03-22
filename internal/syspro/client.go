@@ -35,13 +35,14 @@ type SalesOrderResult struct {
 	ErrorMessage      string
 }
 
-// sortoiResponse is used to parse the XML returned by a successful SORTOI transaction.
-// SYSPRO wraps the result in a <SalesOrders><Orders><OrderHeader>...</OrderHeader></Orders></SalesOrders> envelope.
+// sortoiResponse is used to parse the XML returned by a SORTOI transaction.
 type sortoiResponse struct {
-	XMLName     xml.Name `xml:"SalesOrders"`
-	OrderNumber string   `xml:"Orders>OrderHeader>SalesOrder"`
-	ReturnCode  string   `xml:"ReturnCode"`
-	Message     string   `xml:"Message"`
+	XMLName          xml.Name `xml:"SalesOrders"`
+	OrderNumber      string   `xml:"Orders>OrderHeader>SalesOrder"`
+	CustomerPoNumber string   `xml:"Orders>OrderHeader>CustomerPoNumber"`
+	ValidationStatus string   `xml:"ValidationStatus>Status"`
+	ItemsProcessed   string   `xml:"StatusOfItems>ItemsProcessed"`
+	ItemsInvalid     string   `xml:"StatusOfItems>ItemsInvalid"`
 }
 
 // enetClient is the real implementation that talks to SYSPRO e.net REST.
@@ -94,14 +95,14 @@ func (c *enetClient) SubmitSalesOrder(ctx context.Context, order model.Order, li
 	return parseSORTOIResponse(respXML)
 }
 
-// logon calls POST /Logon and returns the session GUID.
+// logon calls GET /Logon and returns the session GUID.
 func (c *enetClient) logon(ctx context.Context) (string, error) {
-	form := url.Values{
+	params := url.Values{
 		"Operator":         {c.operator},
 		"OperatorPassword": {c.password},
 		"CompanyId":        {c.companyID},
 	}
-	body, err := c.post(ctx, "/Logon", form)
+	body, err := c.get(ctx, "/Logon", params)
 	if err != nil {
 		return "", err
 	}
@@ -117,49 +118,51 @@ func (c *enetClient) logon(ctx context.Context) (string, error) {
 	return guid, nil
 }
 
-// logoff calls POST /Logoff with the session GUID.
+// logoff calls GET /Logoff with the session GUID.
 func (c *enetClient) logoff(ctx context.Context, guid string) error {
-	form := url.Values{
+	params := url.Values{
 		"UserId": {guid},
 	}
-	_, err := c.post(ctx, "/Logoff", form)
+	_, err := c.get(ctx, "/Logoff", params)
 	return err
 }
 
-// transaction calls POST /Transaction and returns the raw XML response body.
+// transaction calls GET /Transaction/Post and returns the raw XML response body.
 func (c *enetClient) transaction(ctx context.Context, guid, businessObject, paramsXML, dataXML string) (string, error) {
-	form := url.Values{
+	params := url.Values{
 		"UserId":         {guid},
 		"BusinessObject": {businessObject},
 		"XmlParameters":  {paramsXML},
 		"XmlIn":          {dataXML},
 	}
-	body, err := c.post(ctx, "/Transaction", form)
+	body, err := c.get(ctx, "/Transaction/Post", params)
 	if err != nil {
 		return "", err
 	}
-	// e.net wraps the XML in a JSON string
+	// e.net may return JSON-wrapped or raw XML depending on version.
 	var xmlStr string
 	if err := json.Unmarshal(body, &xmlStr); err != nil {
 		xmlStr = strings.TrimSpace(string(body))
 	}
+	if xmlStr == "" {
+		return "", fmt.Errorf("transaction returned empty response")
+	}
+	c.logger.Debug("transaction response", "length", len(xmlStr), "first100", xmlStr[:min(100, len(xmlStr))])
 	return xmlStr, nil
 }
 
-// post is a thin wrapper around http.PostForm that handles URL construction,
-// context propagation, and non-2xx status codes.
-func (c *enetClient) post(ctx context.Context, path string, form url.Values) ([]byte, error) {
-	target := c.baseURL + path
+// get sends a GET request with query parameters and returns the response body.
+func (c *enetClient) get(ctx context.Context, path string, params url.Values) ([]byte, error) {
+	target := c.baseURL + path + "?" + params.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building request for %s: %w", path, err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", path, err)
+		return nil, fmt.Errorf("GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 
@@ -169,7 +172,7 @@ func (c *enetClient) post(ctx context.Context, path string, form url.Values) ([]
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("POST %s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("GET %s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return body, nil
@@ -177,22 +180,33 @@ func (c *enetClient) post(ctx context.Context, path string, form url.Values) ([]
 
 // parseSORTOIResponse interprets the XML string returned by a SORTOI transaction.
 func parseSORTOIResponse(xmlStr string) (*SalesOrderResult, error) {
+	// SYSPRO declares encoding="Windows-1252" which Go's xml package doesn't
+	// support natively. The actual content is ASCII-safe, so strip the declaration.
+	if i := strings.Index(xmlStr, "?>"); i != -1 {
+		xmlStr = strings.TrimSpace(xmlStr[i+2:])
+	}
+
 	var resp sortoiResponse
 	if err := xml.Unmarshal([]byte(xmlStr), &resp); err != nil {
 		return nil, fmt.Errorf("parsing SORTOI response XML: %w", err)
 	}
 
-	// SYSPRO signals failure via a non-empty ReturnCode or empty SalesOrder number.
-	if resp.ReturnCode != "" && resp.ReturnCode != "0" {
+	if resp.ValidationStatus != "Successful" {
 		return &SalesOrderResult{
 			Success:      false,
-			ErrorMessage: resp.Message,
+			ErrorMessage: fmt.Sprintf("SYSPRO validation failed (processed: %s, invalid: %s)", resp.ItemsProcessed, resp.ItemsInvalid),
 		}, nil
 	}
 
+	// SORTOI doesn't always echo back the generated SO number.
+	// When empty, use the customer PO number for traceability.
+	orderRef := resp.OrderNumber
+	if orderRef == "" {
+		orderRef = resp.CustomerPoNumber
+	}
+
 	return &SalesOrderResult{
-		SysproOrderNumber: resp.OrderNumber,
-		Success:           resp.OrderNumber != "",
-		ErrorMessage:      resp.Message,
+		SysproOrderNumber: orderRef,
+		Success:           true,
 	}, nil
 }

@@ -46,9 +46,12 @@ type sortoiDetail struct {
 }
 
 type sortoiStockLine struct {
-	StockCode string  `xml:"StockCode"`
-	OrderQty  int     `xml:"OrderQty"`
-	Price     float64 `xml:"Price"`
+	CustomerPoLine string  `xml:"CustomerPoLine"`
+	StockCode      string  `xml:"StockCode"`
+	OrderQty       int     `xml:"OrderQty"`
+	OrderUom       string  `xml:"OrderUom"`
+	Price          float64 `xml:"Price"`
+	PriceUom       string  `xml:"PriceUom"`
 }
 
 // buildSORTOI produces the two XML strings required by the SORTOI transaction call.
@@ -66,10 +69,18 @@ func buildSORTOI(order model.Order, lines []model.OrderLine) (string, string, er
 
 	stockLines := make([]sortoiStockLine, len(lines))
 	for i, l := range lines {
+		// Net price: subtract per-unit discount (Shopify sends total discount across all units).
+		netPrice := l.UnitPrice
+		if l.Discount > 0 && l.Quantity > 0 {
+			netPrice -= l.Discount / float64(l.Quantity)
+		}
 		stockLines[i] = sortoiStockLine{
-			StockCode: l.SKU,
-			OrderQty:  l.Quantity,
-			Price:     l.UnitPrice,
+			CustomerPoLine: fmt.Sprintf("%04d", i+1),
+			StockCode:      l.SKU,
+			OrderQty:       l.Quantity,
+			OrderUom:       "EA",
+			Price:          netPrice,
+			PriceUom:       "EA",
 		}
 	}
 

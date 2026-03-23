@@ -118,6 +118,7 @@ func run() error {
 
 			var syncCtx context.Context
 			syncCtx, syncCancel = context.WithCancel(ctx)
+			defer syncCancel()
 			go syncer.Run(syncCtx)
 		}
 	} else {

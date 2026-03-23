@@ -25,17 +25,20 @@ type OrderStore interface {
 
 // Handler processes inbound Shopify webhooks.
 type Handler struct {
-	store  OrderStore
-	secret string
-	logger *slog.Logger
+	store     OrderStore
+	secret    string
+	triggerCh chan<- struct{}
+	logger    *slog.Logger
 }
 
 // NewHandler creates a webhook handler with the given store, HMAC secret, and logger.
-func NewHandler(store OrderStore, secret string, logger *slog.Logger) *Handler {
+// triggerCh signals the stock syncer when a new order arrives (nil disables triggering).
+func NewHandler(store OrderStore, secret string, triggerCh chan<- struct{}, logger *slog.Logger) *Handler {
 	return &Handler{
-		store:  store,
-		secret: secret,
-		logger: logger,
+		store:     store,
+		secret:    secret,
+		triggerCh: triggerCh,
+		logger:    logger,
 	}
 }
 
@@ -141,6 +144,14 @@ func (h *Handler) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		"order_number", payload.Name,
 		"line_items", len(payload.LineItems),
 	)
+
+	// Signal stock syncer that a new order arrived (non-blocking).
+	if h.triggerCh != nil {
+		select {
+		case h.triggerCh <- struct{}{}:
+		default:
+		}
+	}
 
 	h.respond(w, http.StatusOK, "status", "ok")
 }

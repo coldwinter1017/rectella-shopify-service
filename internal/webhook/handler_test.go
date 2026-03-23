@@ -294,7 +294,7 @@ func TestHandleOrderCreate(t *testing.T) {
 				}
 			}
 
-			h := NewHandler(tt.store, testSecret, testLogger())
+			h := NewHandler(tt.store, testSecret, nil, testLogger())
 
 			var sig string
 			if tt.signBody {

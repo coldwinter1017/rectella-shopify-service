@@ -136,7 +136,7 @@ func newTestServer(t *testing.T) *testServer {
 	})
 
 	// Webhook handler.
-	wh := webhook.NewHandler(db, secret, logger)
+	wh := webhook.NewHandler(db, secret, nil, logger)
 	wh.Register(mux)
 
 	// Orders endpoint (mirrors main.go).

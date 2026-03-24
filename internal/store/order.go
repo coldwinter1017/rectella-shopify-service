@@ -163,7 +163,8 @@ func (db *DB) FetchPendingOrders(ctx context.Context, limit int) ([]model.OrderW
 			ship_phone, ship_email,
 			payment_reference, payment_amount,
 			raw_payload, syspro_order_number, attempts, last_error,
-			order_date, created_at, updated_at
+			order_date, created_at, updated_at,
+			fulfilled_at, shopify_fulfillment_id
 		FROM orders
 		WHERE status = 'pending'
 		ORDER BY created_at ASC
@@ -185,6 +186,7 @@ func (db *DB) FetchPendingOrders(ctx context.Context, limit int) ([]model.OrderW
 			&o.PaymentReference, &o.PaymentAmount,
 			&o.RawPayload, &o.SysproOrderNumber, &o.Attempts, &o.LastError,
 			&o.OrderDate, &o.CreatedAt, &o.UpdatedAt,
+			&o.FulfilledAt, &o.ShopifyFulfilmentID,
 		); err != nil {
 			return nil, fmt.Errorf("scanning order row: %w", err)
 		}
@@ -255,7 +257,8 @@ func (db *DB) ListOrdersByStatus(ctx context.Context, status model.OrderStatus) 
 			ship_phone, ship_email,
 			payment_reference, payment_amount,
 			raw_payload, syspro_order_number, attempts, last_error,
-			order_date, created_at, updated_at
+			order_date, created_at, updated_at,
+			fulfilled_at, shopify_fulfillment_id
 		FROM orders
 		WHERE status = $1
 		ORDER BY created_at DESC`, string(status),
@@ -276,12 +279,72 @@ func (db *DB) ListOrdersByStatus(ctx context.Context, status model.OrderStatus) 
 			&o.PaymentReference, &o.PaymentAmount,
 			&o.RawPayload, &o.SysproOrderNumber, &o.Attempts, &o.LastError,
 			&o.OrderDate, &o.CreatedAt, &o.UpdatedAt,
+			&o.FulfilledAt, &o.ShopifyFulfilmentID,
 		); err != nil {
 			return nil, fmt.Errorf("scanning order: %w", err)
 		}
 		orders = append(orders, o)
 	}
 	return orders, rows.Err()
+}
+
+// FetchSubmittedOrders returns orders that have been submitted to SYSPRO
+// but not yet fulfilled in Shopify, ordered oldest first.
+func (db *DB) FetchSubmittedOrders(ctx context.Context) ([]model.Order, error) {
+	rows, err := db.Pool.Query(ctx,
+		`SELECT id, shopify_order_id, order_number, status, customer_account,
+			ship_first_name, ship_last_name, ship_address1, ship_address2,
+			ship_city, ship_province, ship_postcode, ship_country,
+			ship_phone, ship_email,
+			payment_reference, payment_amount,
+			raw_payload, syspro_order_number, attempts, last_error,
+			order_date, created_at, updated_at,
+			fulfilled_at, shopify_fulfillment_id
+		FROM orders
+		WHERE status = 'submitted'
+		  AND fulfilled_at IS NULL
+		  AND syspro_order_number != ''
+		ORDER BY created_at ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying submitted orders: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []model.Order
+	for rows.Next() {
+		var o model.Order
+		if err := rows.Scan(
+			&o.ID, &o.ShopifyOrderID, &o.OrderNumber, &o.Status, &o.CustomerAccount,
+			&o.ShipFirstName, &o.ShipLastName, &o.ShipAddress1, &o.ShipAddress2,
+			&o.ShipCity, &o.ShipProvince, &o.ShipPostcode, &o.ShipCountry,
+			&o.ShipPhone, &o.ShipEmail,
+			&o.PaymentReference, &o.PaymentAmount,
+			&o.RawPayload, &o.SysproOrderNumber, &o.Attempts, &o.LastError,
+			&o.OrderDate, &o.CreatedAt, &o.UpdatedAt,
+			&o.FulfilledAt, &o.ShopifyFulfilmentID,
+		); err != nil {
+			return nil, fmt.Errorf("scanning submitted order: %w", err)
+		}
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}
+
+// UpdateOrderFulfilled marks an order as fulfilled with the Shopify fulfilment GID.
+func (db *DB) UpdateOrderFulfilled(ctx context.Context, orderID int64, shopifyFulfilmentID string) error {
+	tag, err := db.Pool.Exec(ctx,
+		`UPDATE orders SET fulfilled_at = NOW(), shopify_fulfillment_id = $2, updated_at = NOW()
+		WHERE id = $1`,
+		orderID, shopifyFulfilmentID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating order %d fulfilled: %w", orderID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("order %d not found", orderID)
+	}
+	return nil
 }
 
 // FetchReservedQuantities returns the total quantity of each SKU in

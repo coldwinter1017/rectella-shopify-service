@@ -49,6 +49,10 @@ type Order struct {
 	OrderDate time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// Fulfilment tracking
+	FulfilledAt        *time.Time // nil until Shopify fulfilment created
+	ShopifyFulfilmentID string    // Shopify GID, empty until fulfilled
 }
 
 type OrderLine struct {

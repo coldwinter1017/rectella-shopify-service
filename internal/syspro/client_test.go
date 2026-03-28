@@ -303,6 +303,189 @@ func TestParseSORTOIResponse_InvalidXML(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// parseSORTOIResponse edge-case tests
+// ---------------------------------------------------------------------------
+
+// TestParseSORTOI_EmptySalesOrder documents the real-world SYSPRO RILT behaviour:
+// ValidationStatus is "Successful" and ItemsProcessed=000001, but <SalesOrder/>
+// is empty (self-closing). The parser should return Success=true and fall back
+// to CustomerPoNumber for traceability.
+func TestParseSORTOI_EmptySalesOrder(t *testing.T) {
+	xml := `<SalesOrders>
+  <Orders>
+    <OrderHeader>
+      <CustomerPoNumber>#TEST-123</CustomerPoNumber>
+      <SalesOrder/>
+    </OrderHeader>
+  </Orders>
+  <ValidationStatus>
+    <Status>Successful</Status>
+  </ValidationStatus>
+  <StatusOfItems>
+    <ItemsProcessed>000001</ItemsProcessed>
+    <ItemsInvalid>000000</ItemsInvalid>
+  </StatusOfItems>
+</SalesOrders>`
+
+	result, err := parseSORTOIResponse(xml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Error("expected Success=true for empty SalesOrder with Successful status")
+	}
+	if result.SysproOrderNumber != "#TEST-123" {
+		t.Errorf("expected CustomerPoNumber fallback #TEST-123, got %q", result.SysproOrderNumber)
+	}
+}
+
+// TestParseSORTOI_WithSalesOrder verifies the normal success path where SYSPRO
+// returns an actual sales order number in the response.
+func TestParseSORTOI_WithSalesOrder(t *testing.T) {
+	xml := `<SalesOrders>
+  <Orders>
+    <OrderHeader>
+      <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
+      <SalesOrder>001234</SalesOrder>
+    </OrderHeader>
+  </Orders>
+  <ValidationStatus>
+    <Status>Successful</Status>
+  </ValidationStatus>
+  <StatusOfItems>
+    <ItemsProcessed>000001</ItemsProcessed>
+    <ItemsInvalid>000000</ItemsInvalid>
+  </StatusOfItems>
+</SalesOrders>`
+
+	result, err := parseSORTOIResponse(xml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Error("expected Success=true")
+	}
+	if result.SysproOrderNumber != "001234" {
+		t.Errorf("expected SysproOrderNumber=001234, got %q", result.SysproOrderNumber)
+	}
+}
+
+// TestParseSORTOI_ValidationFailed verifies that a non-Successful status returns
+// Success=false with an error message containing item counts.
+func TestParseSORTOI_ValidationFailed(t *testing.T) {
+	xml := `<SalesOrders>
+  <Orders>
+    <OrderHeader>
+      <SalesOrder/>
+    </OrderHeader>
+  </Orders>
+  <ValidationStatus>
+    <Status>Failed</Status>
+  </ValidationStatus>
+  <StatusOfItems>
+    <ItemsProcessed>000002</ItemsProcessed>
+    <ItemsInvalid>000001</ItemsInvalid>
+  </StatusOfItems>
+</SalesOrders>`
+
+	result, err := parseSORTOIResponse(xml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Success {
+		t.Error("expected Success=false for validation failure")
+	}
+	if !strings.Contains(result.ErrorMessage, "000002") {
+		t.Errorf("expected error message to contain ItemsProcessed count, got: %q", result.ErrorMessage)
+	}
+	if !strings.Contains(result.ErrorMessage, "000001") {
+		t.Errorf("expected error message to contain ItemsInvalid count, got: %q", result.ErrorMessage)
+	}
+}
+
+// TestParseSORTOI_MalformedXML verifies that completely broken XML returns a Go
+// error (not a SalesOrderResult with Success=false).
+func TestParseSORTOI_MalformedXML(t *testing.T) {
+	_, err := parseSORTOIResponse("<SalesOrders><broken")
+	if err == nil {
+		t.Fatal("expected error for malformed XML, got nil")
+	}
+	if !strings.Contains(err.Error(), "parsing SORTOI response XML") {
+		t.Errorf("expected error to mention parsing, got: %v", err)
+	}
+}
+
+// TestParseSORTOI_WindowsEncoding verifies that the parser strips the
+// encoding="Windows-1252" XML declaration before unmarshalling, since Go's
+// xml package does not support that encoding natively.
+func TestParseSORTOI_WindowsEncoding(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="Windows-1252"?>
+<SalesOrders>
+  <Orders>
+    <OrderHeader>
+      <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
+      <SalesOrder>005678</SalesOrder>
+    </OrderHeader>
+  </Orders>
+  <ValidationStatus>
+    <Status>Successful</Status>
+  </ValidationStatus>
+  <StatusOfItems>
+    <ItemsProcessed>000001</ItemsProcessed>
+    <ItemsInvalid>000000</ItemsInvalid>
+  </StatusOfItems>
+</SalesOrders>`
+
+	result, err := parseSORTOIResponse(xml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Error("expected Success=true after stripping Windows-1252 declaration")
+	}
+	if result.SysproOrderNumber != "005678" {
+		t.Errorf("expected SysproOrderNumber=005678, got %q", result.SysproOrderNumber)
+	}
+}
+
+// TestParseSORTOI_RealLiveResponse uses the actual 2205-byte response captured
+// from live SYSPRO testing against company RILT. This documents the exact
+// format returned by production SYSPRO, including attributes on the root
+// element that the parser must tolerate.
+func TestParseSORTOI_RealLiveResponse(t *testing.T) {
+	realResponse := `<?xml version="1.0" encoding="Windows-1252"?>
+<SalesOrders Language='05' Language2='EN' CssStyle='' DecFormat='1' DateFormat='01' Role='01' Version='8.0.105' OperatorPrimaryRole='017'>
+<Orders>
+<OrderHeader>
+<CustomerPoNumber>#TEST-1774666873</CustomerPoNumber>
+<OrderActionType>A</OrderActionType>
+<SalesOrder/>
+<OrderType>W</OrderType>
+</OrderHeader>
+</Orders>
+<ValidationStatus>
+<Status>Successful</Status>
+</ValidationStatus>
+<StatusOfItems>
+<ItemsProcessed>000001</ItemsProcessed>
+<ItemsInvalid>000000</ItemsInvalid>
+</StatusOfItems>
+</SalesOrders>`
+
+	result, err := parseSORTOIResponse(realResponse)
+	if err != nil {
+		t.Fatalf("unexpected error parsing real live response: %v", err)
+	}
+	if !result.Success {
+		t.Error("expected Success=true for live SYSPRO response")
+	}
+	// SalesOrder is empty (self-closing), so parser falls back to CustomerPoNumber.
+	if result.SysproOrderNumber != "#TEST-1774666873" {
+		t.Errorf("expected CustomerPoNumber fallback #TEST-1774666873, got %q", result.SysproOrderNumber)
+	}
+}
+
 // TestNewEnetClient_Interface verifies the constructor satisfies the Client interface.
 func TestNewEnetClient_Interface(t *testing.T) {
 	var _ Client = NewEnetClient("http://example.com", "op", "pw", "co", slog.Default())

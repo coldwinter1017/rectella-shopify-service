@@ -110,6 +110,143 @@ func TestParseINVQRY_InvalidXML(t *testing.T) {
 	}
 }
 
+// realINVQRYResponse is a trimmed version of the actual SYSPRO RILT response for
+// CBBQ0001. It includes the XML declaration with Windows-1252 encoding,
+// QueryOptions with StockCode/Description, and multiple WarehouseItem entries
+// (AAAA, BQUR, BURN) matching what the production system returns.
+const realINVQRYResponse = `<?xml version="1.0" encoding="Windows-1252"?>
+<InvQuery>
+  <QueryOptions>
+    <StockCode>CBBQ0001</StockCode>
+    <Description>Bar-Be-Quick Instant BBQ - Standard</Description>
+  </QueryOptions>
+  <WarehouseItem>
+    <Warehouse>AAAA</Warehouse>
+    <QtyOnHand>            0.000000</QtyOnHand>
+    <AvailableQty>            0.000000</AvailableQty>
+  </WarehouseItem>
+  <WarehouseItem>
+    <Warehouse>BQUR</Warehouse>
+    <QtyOnHand>            0.000000</QtyOnHand>
+    <AvailableQty>            0.000000</AvailableQty>
+  </WarehouseItem>
+  <WarehouseItem>
+    <Warehouse>BURN</Warehouse>
+    <QtyOnHand>          240.000000</QtyOnHand>
+    <AvailableQty>          240.000000</AvailableQty>
+  </WarehouseItem>
+</InvQuery>`
+
+func TestParseINVQRY_RealResponse(t *testing.T) {
+	resp, err := parseINVQRY(realINVQRYResponse)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.QueryOptions.StockCode != "CBBQ0001" {
+		t.Errorf("expected StockCode=CBBQ0001, got %q", resp.QueryOptions.StockCode)
+	}
+	if resp.QueryOptions.Description != "Bar-Be-Quick Instant BBQ - Standard" {
+		t.Errorf("unexpected Description: %q", resp.QueryOptions.Description)
+	}
+	if len(resp.WarehouseItems) != 3 {
+		t.Fatalf("expected 3 WarehouseItems (AAAA, BQUR, BURN), got %d", len(resp.WarehouseItems))
+	}
+	// Verify BURN warehouse has the right AvailableQty.
+	var burnFound bool
+	for _, wh := range resp.WarehouseItems {
+		if strings.TrimSpace(wh.Warehouse) == "BURN" {
+			burnFound = true
+			qty := strings.TrimSpace(wh.AvailableQty)
+			if qty != "240.000000" {
+				t.Errorf("BURN AvailableQty: expected 240.000000, got %q", qty)
+			}
+			qtyOnHand := strings.TrimSpace(wh.QtyOnHand)
+			if qtyOnHand != "240.000000" {
+				t.Errorf("BURN QtyOnHand: expected 240.000000, got %q", qtyOnHand)
+			}
+		}
+	}
+	if !burnFound {
+		t.Error("BURN warehouse not found in response")
+	}
+	// Verify zero-stock warehouses parse correctly.
+	for _, wh := range resp.WarehouseItems {
+		name := strings.TrimSpace(wh.Warehouse)
+		if name == "AAAA" || name == "BQUR" {
+			qty := strings.TrimSpace(wh.AvailableQty)
+			if qty != "0.000000" {
+				t.Errorf("%s AvailableQty: expected 0.000000, got %q", name, qty)
+			}
+		}
+	}
+}
+
+func TestParseINVQRY_MultiWarehouse(t *testing.T) {
+	// Response with multiple warehouses. Only BURN matches our filter.
+	// The parser should return all warehouses; the caller (QueryStock) filters.
+	multiResp := `<InvQuery>
+  <QueryOptions>
+    <StockCode>CBBQ0005</StockCode>
+    <Description>Bar-Be-Quick Party BBQ</Description>
+  </QueryOptions>
+  <WarehouseItem>
+    <Warehouse>AAAA</Warehouse>
+    <QtyOnHand>           10.000000</QtyOnHand>
+    <AvailableQty>           10.000000</AvailableQty>
+  </WarehouseItem>
+  <WarehouseItem>
+    <Warehouse>BURN</Warehouse>
+    <QtyOnHand>          350.000000</QtyOnHand>
+    <AvailableQty>          325.000000</AvailableQty>
+  </WarehouseItem>
+  <WarehouseItem>
+    <Warehouse>BQUR</Warehouse>
+    <QtyOnHand>           50.000000</QtyOnHand>
+    <AvailableQty>           42.000000</AvailableQty>
+  </WarehouseItem>
+</InvQuery>`
+
+	resp, err := parseINVQRY(multiResp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.WarehouseItems) != 3 {
+		t.Fatalf("expected 3 WarehouseItems, got %d", len(resp.WarehouseItems))
+	}
+
+	// Simulate the warehouse filtering that QueryStock does: find BURN.
+	warehouse := "BURN"
+	var found *invqryWarehouse
+	for i := range resp.WarehouseItems {
+		if strings.TrimSpace(resp.WarehouseItems[i].Warehouse) == warehouse {
+			found = &resp.WarehouseItems[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("warehouse %q not found in response", warehouse)
+	}
+	qty := strings.TrimSpace(found.AvailableQty)
+	if qty != "325.000000" {
+		t.Errorf("BURN AvailableQty: expected 325.000000, got %q", qty)
+	}
+	// Ensure non-matching warehouses have different values (parser didn't mix them up).
+	for _, wh := range resp.WarehouseItems {
+		name := strings.TrimSpace(wh.Warehouse)
+		avail := strings.TrimSpace(wh.AvailableQty)
+		switch name {
+		case "AAAA":
+			if avail != "10.000000" {
+				t.Errorf("AAAA AvailableQty: expected 10.000000, got %q", avail)
+			}
+		case "BQUR":
+			if avail != "42.000000" {
+				t.Errorf("BQUR AvailableQty: expected 42.000000, got %q", avail)
+			}
+		}
+	}
+}
+
 func TestQueryStock_Success(t *testing.T) {
 	fake := newFakeEnet(t)
 	fake.queryResponses["MBBQ0159"] = sampleINVQRYResponse

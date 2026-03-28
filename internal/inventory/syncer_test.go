@@ -240,3 +240,111 @@ func TestSyncer_Debounce_CoalescesMultipleSignals(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// --- Real-world stock data tests ---
+
+func TestComputeEffective_RealWorldQuantities(t *testing.T) {
+	// CBBQ0001 in RILT has stock across warehouses BURN (primary), AAAA, BQUR
+	// — all returning 0. Verify computation handles zero-stock correctly.
+	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 0.0}}
+	p := &mockPusher{}
+	s := &mockReservationStore{reserved: map[string]int{}}
+	syncer := NewSyncer(q, p, s, time.Hour, "BURN", []string{"CBBQ0001"},
+		make(chan struct{}, 1), syncerLogger())
+	syncer.fullSync(context.Background())
+	if p.pushCalls != 1 {
+		t.Fatalf("expected 1 push, got %d", p.pushCalls)
+	}
+	if p.lastPush["CBBQ0001"] != 0 {
+		t.Errorf("expected 0 for zero-stock SKU, got %d", p.lastPush["CBBQ0001"])
+	}
+}
+
+func TestComputeEffective_WithReservedOrders(t *testing.T) {
+	// SYSPRO shows 10 available, 3 pending orders with qty 2 each = 6 reserved.
+	// Effective should be 10 - 6 = 4.
+	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 10.0}}
+	p := &mockPusher{}
+	s := &mockReservationStore{reserved: map[string]int{"CBBQ0001": 6}}
+	syncer := NewSyncer(q, p, s, time.Hour, "BURN", []string{"CBBQ0001"},
+		make(chan struct{}, 1), syncerLogger())
+	syncer.fullSync(context.Background())
+	if p.pushCalls != 1 {
+		t.Fatalf("expected 1 push, got %d", p.pushCalls)
+	}
+	if p.lastPush["CBBQ0001"] != 4 {
+		t.Errorf("expected effective=4 (10 - 6), got %d", p.lastPush["CBBQ0001"])
+	}
+}
+
+func TestComputeEffective_ReservedExceedsAvailable(t *testing.T) {
+	// Reserved qty (15) exceeds available (8). Must clamp to 0, never go negative.
+	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 8.0}}
+	p := &mockPusher{}
+	s := &mockReservationStore{reserved: map[string]int{"CBBQ0001": 15}}
+	syncer := NewSyncer(q, p, s, time.Hour, "BURN", []string{"CBBQ0001"},
+		make(chan struct{}, 1), syncerLogger())
+	syncer.fullSync(context.Background())
+	if p.pushCalls != 1 {
+		t.Fatalf("expected 1 push, got %d", p.pushCalls)
+	}
+	if p.lastPush["CBBQ0001"] != 0 {
+		t.Errorf("expected 0 (clamped), got %d", p.lastPush["CBBQ0001"])
+	}
+}
+
+func TestComputeEffective_MultiSKU(t *testing.T) {
+	// Multiple SKUs: some with reservations, some without.
+	// Each should be computed independently.
+	q := &mockQuerier{stock: map[string]float64{
+		"CBBQ0001": 20.0,
+		"CBBQ0002": 50.0,
+		"CBBQ0003": 0.0,
+		"CBBQ0004": 5.0,
+	}}
+	p := &mockPusher{}
+	s := &mockReservationStore{reserved: map[string]int{
+		"CBBQ0001": 3,
+		"CBBQ0004": 10, // exceeds available — should clamp
+	}}
+	syncer := NewSyncer(q, p, s, time.Hour, "BURN",
+		[]string{"CBBQ0001", "CBBQ0002", "CBBQ0003", "CBBQ0004"},
+		make(chan struct{}, 1), syncerLogger())
+	syncer.fullSync(context.Background())
+	if p.pushCalls != 1 {
+		t.Fatalf("expected 1 push, got %d", p.pushCalls)
+	}
+	cases := map[string]int{
+		"CBBQ0001": 17, // 20 - 3
+		"CBBQ0002": 50, // 50 - 0
+		"CBBQ0003": 0,  // 0 - 0
+		"CBBQ0004": 0,  // 5 - 10, clamped to 0
+	}
+	for sku, want := range cases {
+		if got := p.lastPush[sku]; got != want {
+			t.Errorf("%s: expected %d, got %d", sku, want, got)
+		}
+	}
+}
+
+func TestComputeEffective_NoReservations(t *testing.T) {
+	// No pending/processing orders at all. Effective = SYSPRO qty directly.
+	q := &mockQuerier{stock: map[string]float64{
+		"CBBQ0001": 75.0,
+		"CBBQ0002": 120.0,
+	}}
+	p := &mockPusher{}
+	s := &mockReservationStore{reserved: map[string]int{}}
+	syncer := NewSyncer(q, p, s, time.Hour, "BURN", []string{"CBBQ0001", "CBBQ0002"},
+		make(chan struct{}, 1), syncerLogger())
+	syncer.fullSync(context.Background())
+	if p.pushCalls != 1 {
+		t.Fatalf("expected 1 push, got %d", p.pushCalls)
+	}
+	if p.lastPush["CBBQ0001"] != 75 {
+		t.Errorf("CBBQ0001: expected 75, got %d", p.lastPush["CBBQ0001"])
+	}
+	if p.lastPush["CBBQ0002"] != 120 {
+		t.Errorf("CBBQ0002: expected 120, got %d", p.lastPush["CBBQ0002"])
+	}
+}

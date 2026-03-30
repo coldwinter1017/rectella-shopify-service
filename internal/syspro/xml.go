@@ -10,10 +10,13 @@ import (
 // sortoiParams maps to the <SalesOrders><Parameters>...</Parameters></SalesOrders> XML
 // sent as XmlParameters on every SORTOI call.
 type sortoiParams struct {
-	XMLName        xml.Name `xml:"SalesOrders"`
-	IgnoreWarnings string   `xml:"Parameters>IgnoreWarnings"`
-	AlwaysUsePrice string   `xml:"Parameters>AlwaysUsePriceEntered"`
-	AllowZeroPrice string   `xml:"Parameters>AllowZeroPrice"`
+	XMLName         xml.Name `xml:"SalesOrders"`
+	Process         string   `xml:"Parameters>Process"`
+	StatusInProcess string   `xml:"Parameters>StatusInProcess"`
+	ValidateOnly    string   `xml:"Parameters>ValidateOnly"`
+	IgnoreWarnings  string   `xml:"Parameters>IgnoreWarnings"`
+	AlwaysUsePrice  string   `xml:"Parameters>AlwaysUsePriceEntered"`
+	AllowZeroPrice  string   `xml:"Parameters>AllowZeroPrice"`
 }
 
 // sortoiDocument maps to the <SalesOrders><Orders>...</Orders></SalesOrders> XML
@@ -29,9 +32,10 @@ type sortoiOrder struct {
 }
 
 type sortoiHeader struct {
-	CustomerPoNumber  string `xml:"CustomerPoNumber"`
-	Customer          string `xml:"Customer"`
-	OrderDate         string `xml:"OrderDate"` // YYYY-MM-DD
+	CustomerPoNumber string `xml:"CustomerPoNumber"`
+	OrderActionType  string `xml:"OrderActionType"`
+	Customer         string `xml:"Customer"`
+	OrderDate        string `xml:"OrderDate"` // YYYY-MM-DD
 	Email             string `xml:"Email,omitempty"`
 	ShippingInstrs    string `xml:"ShippingInstrs,omitempty"`    // Carrier from Shopify shipping method
 	ShippingInstrsCod string `xml:"ShippingInstrsCod,omitempty"` // Carrier code if available
@@ -49,8 +53,9 @@ type sortoiDetail struct {
 }
 
 type sortoiStockLine struct {
-	CustomerPoLine string  `xml:"CustomerPoLine"`
-	StockCode      string  `xml:"StockCode"`
+	CustomerPoLine string `xml:"CustomerPoLine"`
+	LineActionType string `xml:"LineActionType"`
+	StockCode      string `xml:"StockCode"`
 	OrderQty       int     `xml:"OrderQty"`
 	OrderUom       string  `xml:"OrderUom"`
 	Price          float64 `xml:"Price"`
@@ -61,9 +66,12 @@ type sortoiStockLine struct {
 // Returns (paramsXML, dataXML, error).
 func buildSORTOI(order model.Order, lines []model.OrderLine) (string, string, error) {
 	params := sortoiParams{
-		IgnoreWarnings: "Y",
-		AlwaysUsePrice: "Y",
-		AllowZeroPrice: "Y",
+		Process:         "Import",
+		StatusInProcess: "Y",
+		ValidateOnly:    "N",
+		IgnoreWarnings:  "Y",
+		AlwaysUsePrice:  "Y",
+		AllowZeroPrice:  "Y",
 	}
 	paramsBytes, err := xml.Marshal(params)
 	if err != nil {
@@ -79,6 +87,7 @@ func buildSORTOI(order model.Order, lines []model.OrderLine) (string, string, er
 		}
 		stockLines[i] = sortoiStockLine{
 			CustomerPoLine: fmt.Sprintf("%04d", i+1),
+			LineActionType: "A",
 			StockCode:      l.SKU,
 			OrderQty:       l.Quantity,
 			OrderUom:       "EA",
@@ -91,6 +100,7 @@ func buildSORTOI(order model.Order, lines []model.OrderLine) (string, string, er
 		Orders: sortoiOrder{
 			Header: sortoiHeader{
 				CustomerPoNumber: order.OrderNumber,
+				OrderActionType:  "A",
 				Customer:         order.CustomerAccount,
 				OrderDate:        order.OrderDate.Format("2006-01-02"),
 				Email:            order.ShipEmail,

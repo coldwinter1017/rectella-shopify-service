@@ -36,10 +36,11 @@ type SalesOrderResult struct {
 }
 
 // sortoiResponse is used to parse the XML returned by a SORTOI transaction.
+// With Process=Import, the response uses <Order> (not <Orders><OrderHeader>).
 type sortoiResponse struct {
 	XMLName          xml.Name `xml:"SalesOrders"`
-	OrderNumber      string   `xml:"Orders>OrderHeader>SalesOrder"`
-	CustomerPoNumber string   `xml:"Orders>OrderHeader>CustomerPoNumber"`
+	OrderNumber      string   `xml:"Order>SalesOrder"`
+	CustomerPoNumber string   `xml:"Order>CustomerPoNumber"`
 	ValidationStatus string   `xml:"ValidationStatus>Status"`
 	ItemsProcessed   string   `xml:"StatusOfItems>ItemsProcessed"`
 	ItemsInvalid     string   `xml:"StatusOfItems>ItemsInvalid"`
@@ -214,22 +215,17 @@ func parseSORTOIResponse(xmlStr string) (*SalesOrderResult, error) {
 		return nil, fmt.Errorf("parsing SORTOI response XML: %w", err)
 	}
 
-	if resp.ValidationStatus != "Successful" {
+	// Import mode: success is determined by a non-empty SalesOrder number.
+	// Validate mode (legacy): checked ValidationStatus=Successful.
+	if resp.OrderNumber == "" {
 		return &SalesOrderResult{
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("SYSPRO validation failed (processed: %s, invalid: %s)", resp.ItemsProcessed, resp.ItemsInvalid),
+			ErrorMessage: fmt.Sprintf("SYSPRO import failed: no sales order number returned (processed: %s, invalid: %s)", resp.ItemsProcessed, resp.ItemsInvalid),
 		}, nil
 	}
 
-	// SORTOI doesn't always echo back the generated SO number.
-	// When empty, use the customer PO number for traceability.
-	orderRef := resp.OrderNumber
-	if orderRef == "" {
-		orderRef = resp.CustomerPoNumber
-	}
-
 	return &SalesOrderResult{
-		SysproOrderNumber: orderRef,
+		SysproOrderNumber: resp.OrderNumber,
 		Success:           true,
 	}, nil
 }

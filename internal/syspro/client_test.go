@@ -17,35 +17,31 @@ import (
 
 const testGUID = "aaaabbbb-cccc-dddd-eeee-ffffffffffff"
 
-// successfulSORTOIResponse matches the real SYSPRO SORTOI response format.
+// successfulSORTOIResponse matches the real SYSPRO SORTOI Import-mode response format.
 const successfulSORTOIResponse = `<SalesOrders>
-  <Orders>
-    <OrderHeader>
-      <SalesOrder>SO12345</SalesOrder>
-    </OrderHeader>
-  </Orders>
-  <ValidationStatus>
-    <Status>Successful</Status>
-  </ValidationStatus>
+  <Order>
+    <SalesOrder>SO12345</SalesOrder>
+    <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
+    <OrderActionType>A</OrderActionType>
+  </Order>
   <StatusOfItems>
     <ItemsProcessed>000001</ItemsProcessed>
-    <ItemsInvalid>000000</ItemsInvalid>
+    <ItemsRejectedWithWarnings>000000</ItemsRejectedWithWarnings>
+    <ItemsProcessedWithWarnings>000001</ItemsProcessedWithWarnings>
   </StatusOfItems>
 </SalesOrders>`
 
-// failedSORTOIResponse simulates a SYSPRO validation failure.
+// failedSORTOIResponse simulates a SYSPRO Import-mode failure (no sales order number).
 const failedSORTOIResponse = `<SalesOrders>
-  <Orders>
-    <OrderHeader>
-      <SalesOrder/>
-    </OrderHeader>
-  </Orders>
-  <ValidationStatus>
-    <Status>Failed</Status>
-  </ValidationStatus>
+  <Order>
+    <SalesOrder/>
+    <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
+    <OrderActionType>A</OrderActionType>
+  </Order>
   <StatusOfItems>
     <ItemsProcessed>000001</ItemsProcessed>
-    <ItemsInvalid>000001</ItemsInvalid>
+    <ItemsRejectedWithWarnings>000001</ItemsRejectedWithWarnings>
+    <ItemsProcessedWithWarnings>000000</ItemsProcessedWithWarnings>
   </StatusOfItems>
 </SalesOrders>`
 
@@ -233,8 +229,8 @@ func TestSubmitSalesOrder_TransactionSysproError(t *testing.T) {
 	if result.Success {
 		t.Error("expected Success=false for SYSPRO business error")
 	}
-	if !strings.Contains(result.ErrorMessage, "invalid") {
-		t.Errorf("expected error message to mention invalid items, got: %q", result.ErrorMessage)
+	if !strings.Contains(result.ErrorMessage, "no sales order number") {
+		t.Errorf("expected error message to mention missing order number, got: %q", result.ErrorMessage)
 	}
 }
 
@@ -307,24 +303,20 @@ func TestParseSORTOIResponse_InvalidXML(t *testing.T) {
 // parseSORTOIResponse edge-case tests
 // ---------------------------------------------------------------------------
 
-// TestParseSORTOI_EmptySalesOrder documents the real-world SYSPRO RILT behaviour:
-// ValidationStatus is "Successful" and ItemsProcessed=000001, but <SalesOrder/>
-// is empty (self-closing). The parser should return Success=true and fall back
-// to CustomerPoNumber for traceability.
+// TestParseSORTOI_EmptySalesOrder documents Import-mode behaviour:
+// when <SalesOrder/> is empty (self-closing), the import failed to create an
+// order. The parser should return Success=false.
 func TestParseSORTOI_EmptySalesOrder(t *testing.T) {
 	xml := `<SalesOrders>
-  <Orders>
-    <OrderHeader>
-      <CustomerPoNumber>#TEST-123</CustomerPoNumber>
-      <SalesOrder/>
-    </OrderHeader>
-  </Orders>
-  <ValidationStatus>
-    <Status>Successful</Status>
-  </ValidationStatus>
+  <Order>
+    <CustomerPoNumber>#TEST-123</CustomerPoNumber>
+    <SalesOrder/>
+    <OrderActionType>A</OrderActionType>
+  </Order>
   <StatusOfItems>
     <ItemsProcessed>000001</ItemsProcessed>
-    <ItemsInvalid>000000</ItemsInvalid>
+    <ItemsRejectedWithWarnings>000000</ItemsRejectedWithWarnings>
+    <ItemsProcessedWithWarnings>000000</ItemsProcessedWithWarnings>
   </StatusOfItems>
 </SalesOrders>`
 
@@ -332,30 +324,27 @@ func TestParseSORTOI_EmptySalesOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.Success {
-		t.Error("expected Success=true for empty SalesOrder with Successful status")
+	if result.Success {
+		t.Error("expected Success=false for empty SalesOrder in Import mode")
 	}
-	if result.SysproOrderNumber != "#TEST-123" {
-		t.Errorf("expected CustomerPoNumber fallback #TEST-123, got %q", result.SysproOrderNumber)
+	if !strings.Contains(result.ErrorMessage, "no sales order number") {
+		t.Errorf("expected error about missing order number, got: %q", result.ErrorMessage)
 	}
 }
 
-// TestParseSORTOI_WithSalesOrder verifies the normal success path where SYSPRO
-// returns an actual sales order number in the response.
+// TestParseSORTOI_WithSalesOrder verifies the normal Import-mode success path
+// where SYSPRO returns an actual sales order number in the response.
 func TestParseSORTOI_WithSalesOrder(t *testing.T) {
 	xml := `<SalesOrders>
-  <Orders>
-    <OrderHeader>
-      <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
-      <SalesOrder>001234</SalesOrder>
-    </OrderHeader>
-  </Orders>
-  <ValidationStatus>
-    <Status>Successful</Status>
-  </ValidationStatus>
+  <Order>
+    <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
+    <SalesOrder>001234</SalesOrder>
+    <OrderActionType>A</OrderActionType>
+  </Order>
   <StatusOfItems>
     <ItemsProcessed>000001</ItemsProcessed>
-    <ItemsInvalid>000000</ItemsInvalid>
+    <ItemsRejectedWithWarnings>000000</ItemsRejectedWithWarnings>
+    <ItemsProcessedWithWarnings>000001</ItemsProcessedWithWarnings>
   </StatusOfItems>
 </SalesOrders>`
 
@@ -371,21 +360,19 @@ func TestParseSORTOI_WithSalesOrder(t *testing.T) {
 	}
 }
 
-// TestParseSORTOI_ValidationFailed verifies that a non-Successful status returns
+// TestParseSORTOI_ImportFailed verifies that an empty SalesOrder returns
 // Success=false with an error message containing item counts.
-func TestParseSORTOI_ValidationFailed(t *testing.T) {
+func TestParseSORTOI_ImportFailed(t *testing.T) {
 	xml := `<SalesOrders>
-  <Orders>
-    <OrderHeader>
-      <SalesOrder/>
-    </OrderHeader>
-  </Orders>
-  <ValidationStatus>
-    <Status>Failed</Status>
-  </ValidationStatus>
+  <Order>
+    <SalesOrder/>
+    <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
+    <OrderActionType>A</OrderActionType>
+  </Order>
   <StatusOfItems>
     <ItemsProcessed>000002</ItemsProcessed>
-    <ItemsInvalid>000001</ItemsInvalid>
+    <ItemsRejectedWithWarnings>000001</ItemsRejectedWithWarnings>
+    <ItemsProcessedWithWarnings>000001</ItemsProcessedWithWarnings>
   </StatusOfItems>
 </SalesOrders>`
 
@@ -394,13 +381,10 @@ func TestParseSORTOI_ValidationFailed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Success {
-		t.Error("expected Success=false for validation failure")
+		t.Error("expected Success=false for import failure")
 	}
 	if !strings.Contains(result.ErrorMessage, "000002") {
 		t.Errorf("expected error message to contain ItemsProcessed count, got: %q", result.ErrorMessage)
-	}
-	if !strings.Contains(result.ErrorMessage, "000001") {
-		t.Errorf("expected error message to contain ItemsInvalid count, got: %q", result.ErrorMessage)
 	}
 }
 
@@ -422,18 +406,15 @@ func TestParseSORTOI_MalformedXML(t *testing.T) {
 func TestParseSORTOI_WindowsEncoding(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="Windows-1252"?>
 <SalesOrders>
-  <Orders>
-    <OrderHeader>
-      <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
-      <SalesOrder>005678</SalesOrder>
-    </OrderHeader>
-  </Orders>
-  <ValidationStatus>
-    <Status>Successful</Status>
-  </ValidationStatus>
+  <Order>
+    <CustomerPoNumber>#BBQ1001</CustomerPoNumber>
+    <SalesOrder>005678</SalesOrder>
+    <OrderActionType>A</OrderActionType>
+  </Order>
   <StatusOfItems>
     <ItemsProcessed>000001</ItemsProcessed>
-    <ItemsInvalid>000000</ItemsInvalid>
+    <ItemsRejectedWithWarnings>000000</ItemsRejectedWithWarnings>
+    <ItemsProcessedWithWarnings>000001</ItemsProcessedWithWarnings>
   </StatusOfItems>
 </SalesOrders>`
 
@@ -449,27 +430,21 @@ func TestParseSORTOI_WindowsEncoding(t *testing.T) {
 	}
 }
 
-// TestParseSORTOI_RealLiveResponse uses the actual 2205-byte response captured
-// from live SYSPRO testing against company RILT. This documents the exact
-// format returned by production SYSPRO, including attributes on the root
-// element that the parser must tolerate.
+// TestParseSORTOI_RealLiveResponse uses a realistic Import-mode response
+// including attributes on the root element that the parser must tolerate.
+// Based on the actual format returned by SYSPRO 8 e.net with Process=Import.
 func TestParseSORTOI_RealLiveResponse(t *testing.T) {
 	realResponse := `<?xml version="1.0" encoding="Windows-1252"?>
 <SalesOrders Language='05' Language2='EN' CssStyle='' DecFormat='1' DateFormat='01' Role='01' Version='8.0.105' OperatorPrimaryRole='017'>
-<Orders>
-<OrderHeader>
+<Order>
 <CustomerPoNumber>#TEST-1774666873</CustomerPoNumber>
 <OrderActionType>A</OrderActionType>
-<SalesOrder/>
-<OrderType>W</OrderType>
-</OrderHeader>
-</Orders>
-<ValidationStatus>
-<Status>Successful</Status>
-</ValidationStatus>
+<SalesOrder>015562</SalesOrder>
+</Order>
 <StatusOfItems>
 <ItemsProcessed>000001</ItemsProcessed>
-<ItemsInvalid>000000</ItemsInvalid>
+<ItemsRejectedWithWarnings>000000</ItemsRejectedWithWarnings>
+<ItemsProcessedWithWarnings>000001</ItemsProcessedWithWarnings>
 </StatusOfItems>
 </SalesOrders>`
 
@@ -480,9 +455,8 @@ func TestParseSORTOI_RealLiveResponse(t *testing.T) {
 	if !result.Success {
 		t.Error("expected Success=true for live SYSPRO response")
 	}
-	// SalesOrder is empty (self-closing), so parser falls back to CustomerPoNumber.
-	if result.SysproOrderNumber != "#TEST-1774666873" {
-		t.Errorf("expected CustomerPoNumber fallback #TEST-1774666873, got %q", result.SysproOrderNumber)
+	if result.SysproOrderNumber != "015562" {
+		t.Errorf("expected SysproOrderNumber=015562, got %q", result.SysproOrderNumber)
 	}
 }
 

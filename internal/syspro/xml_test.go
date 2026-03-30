@@ -16,6 +16,9 @@ func TestBuildSORTOI_ParamsXML(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"<Process>Import</Process>",
+		"<StatusInProcess>Y</StatusInProcess>",
+		"<ValidateOnly>N</ValidateOnly>",
 		"<IgnoreWarnings>Y</IgnoreWarnings>",
 		"<AlwaysUsePriceEntered>Y</AlwaysUsePriceEntered>",
 		"<AllowZeroPrice>Y</AllowZeroPrice>",
@@ -47,6 +50,7 @@ func TestBuildSORTOI_DataXML_HeaderFields(t *testing.T) {
 
 	checks := map[string]string{
 		"CustomerPoNumber": "<CustomerPoNumber>#BBQ1001</CustomerPoNumber>",
+		"OrderActionType":  "<OrderActionType>A</OrderActionType>",
 		"Customer":         "<Customer>WEBS01</Customer>",
 		"OrderDate":        "<OrderDate>2026-02-24</OrderDate>",
 		"Email":            "<Email>john@example.com</Email>",
@@ -78,6 +82,7 @@ func TestBuildSORTOI_DataXML_StockLines(t *testing.T) {
 
 	for _, want := range []string{
 		"<CustomerPoLine>0001</CustomerPoLine>",
+		"<LineActionType>A</LineActionType>",
 		"<StockCode>CBBQ0001</StockCode>",
 		"<OrderQty>2</OrderQty>",
 		"<OrderUom>EA</OrderUom>",

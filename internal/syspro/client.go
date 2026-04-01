@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"codeberg.org/speeder091/rectella-shopify-service/internal/model"
@@ -47,6 +48,10 @@ type sortoiResponse struct {
 }
 
 // EnetClient is the real implementation that talks to SYSPRO e.net REST.
+// SYSPRO allows only one session per operator — a second logon kills the first.
+// The sessionMu mutex serialises all logon-logoff lifecycles so concurrent
+// callers (batch processor, stock syncer, fulfilment syncer) cannot evict
+// each other's sessions.
 type EnetClient struct {
 	baseURL    string
 	operator   string
@@ -54,6 +59,7 @@ type EnetClient struct {
 	companyID  string
 	logger     *slog.Logger
 	httpClient *http.Client
+	sessionMu  sync.Mutex
 }
 
 // NewEnetClient constructs a Client backed by the real SYSPRO e.net REST API.
@@ -71,6 +77,9 @@ func NewEnetClient(baseURL, operator, password, companyID string, logger *slog.L
 // SubmitSalesOrder performs a full logon → SORTOI transaction → logoff cycle.
 // Logoff is always attempted even when an earlier step fails.
 func (c *EnetClient) SubmitSalesOrder(ctx context.Context, order model.Order, lines []model.OrderLine) (*SalesOrderResult, error) {
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+
 	guid, err := c.logon(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("syspro logon: %w", err)

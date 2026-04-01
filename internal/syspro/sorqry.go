@@ -87,6 +87,9 @@ func parseSORQRY(xmlStr string) (*SORQRYResult, error) {
 // sales order numbers. Returns a map of order number -> result. Orders that
 // fail individually are logged and skipped (partial results returned).
 func (c *EnetClient) QueryDispatchedOrders(ctx context.Context, orderNumbers []string) (map[string]SORQRYResult, error) {
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+
 	guid, err := c.logon(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("syspro logon: %w", err)

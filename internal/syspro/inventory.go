@@ -71,6 +71,9 @@ func parseINVQRY(xmlStr string) (*invqryResponse, error) {
 // warehouse. Returns a map of SKU -> available quantity. SKUs that fail
 // individually are logged and skipped (partial results returned).
 func (c *EnetClient) QueryStock(ctx context.Context, skus []string, warehouse string) (map[string]float64, error) {
+	c.sessionMu.Lock()
+	defer c.sessionMu.Unlock()
+
 	guid, err := c.logon(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("syspro logon: %w", err)

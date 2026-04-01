@@ -215,17 +215,28 @@ func parseSORTOIResponse(xmlStr string) (*SalesOrderResult, error) {
 		return nil, fmt.Errorf("parsing SORTOI response XML: %w", err)
 	}
 
-	// Import mode: success is determined by a non-empty SalesOrder number.
-	// Validate mode (legacy): checked ValidationStatus=Successful.
-	if resp.OrderNumber == "" {
+	// Case 1: SYSPRO returned a non-empty sales order number → explicit success.
+	if resp.OrderNumber != "" {
+		return &SalesOrderResult{SysproOrderNumber: resp.OrderNumber, Success: true}, nil
+	}
+
+	// Case 2: <Order> element present but SalesOrder is empty → import failed.
+	// CustomerPoNumber is always populated when the <Order> element exists.
+	if resp.CustomerPoNumber != "" {
 		return &SalesOrderResult{
 			Success:      false,
-			ErrorMessage: fmt.Sprintf("SYSPRO import failed: no sales order number returned (processed: %s, invalid: %s)", resp.ItemsProcessed, resp.ItemsInvalid),
+			ErrorMessage: fmt.Sprintf("SYSPRO import failed: order rejected (processed: %s, invalid: %s)", resp.ItemsProcessed, resp.ItemsInvalid),
 		}, nil
 	}
 
+	// Case 3: No <Order> element. SYSPRO 8 omits the Order block for clean imports
+	// that produce no warnings. Success iff ItemsProcessed is non-zero.
+	if resp.ItemsProcessed != "" && resp.ItemsProcessed != "000000" {
+		return &SalesOrderResult{Success: true}, nil
+	}
+
 	return &SalesOrderResult{
-		SysproOrderNumber: resp.OrderNumber,
-		Success:           true,
+		Success:      false,
+		ErrorMessage: fmt.Sprintf("SYSPRO import failed: no items processed (processed: %s)", resp.ItemsProcessed),
 	}, nil
 }

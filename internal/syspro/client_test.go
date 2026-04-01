@@ -229,8 +229,8 @@ func TestSubmitSalesOrder_TransactionSysproError(t *testing.T) {
 	if result.Success {
 		t.Error("expected Success=false for SYSPRO business error")
 	}
-	if !strings.Contains(result.ErrorMessage, "no sales order number") {
-		t.Errorf("expected error message to mention missing order number, got: %q", result.ErrorMessage)
+	if !strings.Contains(result.ErrorMessage, "order rejected") {
+		t.Errorf("expected error message to mention order rejected, got: %q", result.ErrorMessage)
 	}
 }
 
@@ -327,8 +327,8 @@ func TestParseSORTOI_EmptySalesOrder(t *testing.T) {
 	if result.Success {
 		t.Error("expected Success=false for empty SalesOrder in Import mode")
 	}
-	if !strings.Contains(result.ErrorMessage, "no sales order number") {
-		t.Errorf("expected error about missing order number, got: %q", result.ErrorMessage)
+	if !strings.Contains(result.ErrorMessage, "order rejected") {
+		t.Errorf("expected error about rejected order, got: %q", result.ErrorMessage)
 	}
 }
 
@@ -383,8 +383,8 @@ func TestParseSORTOI_ImportFailed(t *testing.T) {
 	if result.Success {
 		t.Error("expected Success=false for import failure")
 	}
-	if !strings.Contains(result.ErrorMessage, "000002") {
-		t.Errorf("expected error message to contain ItemsProcessed count, got: %q", result.ErrorMessage)
+	if !strings.Contains(result.ErrorMessage, "order rejected") {
+		t.Errorf("expected error message to mention order rejected, got: %q", result.ErrorMessage)
 	}
 }
 
@@ -457,6 +457,31 @@ func TestParseSORTOI_RealLiveResponse(t *testing.T) {
 	}
 	if result.SysproOrderNumber != "015562" {
 		t.Errorf("expected SysproOrderNumber=015562, got %q", result.SysproOrderNumber)
+	}
+}
+
+// TestParseSORTOI_CleanImportNoOrderElement covers the SYSPRO 8 behaviour where a
+// clean import (no warnings) returns only <StatusOfItems> with no <Order> block.
+// Verified against RILT: order 015563 was created this way.
+func TestParseSORTOI_CleanImportNoOrderElement(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="Windows-1252"?>
+<SalesOrders Language='05' Language2='EN' CssStyle='' DecFormat='1' DateFormat='01' Role='01' Version='8.0.161' OperatorPrimaryRole='017'>
+<StatusOfItems>
+<ItemsProcessed>000001</ItemsProcessed>
+<ItemsRejectedWithWarnings>000000</ItemsRejectedWithWarnings>
+<ItemsProcessedWithWarnings>000000</ItemsProcessedWithWarnings>
+</StatusOfItems>
+</SalesOrders>`
+
+	result, err := parseSORTOIResponse(xml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Success {
+		t.Errorf("expected Success=true for clean import, got false (message: %q)", result.ErrorMessage)
+	}
+	if result.SysproOrderNumber != "" {
+		t.Errorf("expected empty SysproOrderNumber for clean import, got %q", result.SysproOrderNumber)
 	}
 }
 

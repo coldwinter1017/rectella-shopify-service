@@ -68,7 +68,7 @@ type sortoiStockLine struct {
 func buildSORTOI(order model.Order, lines []model.OrderLine) (string, string, error) {
 	params := sortoiParams{
 		Process:                    "Import",
-		StatusInProcess:            "Y",
+		StatusInProcess:            "N",
 		ValidateOnly:               "N",
 		IgnoreWarnings:             "W",
 		ApplyIfEntireDocumentValid: "Y",

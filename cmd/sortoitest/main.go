@@ -70,13 +70,13 @@ func run() error {
 
 	poRef := fmt.Sprintf("#TEST-%d", time.Now().Unix())
 
-	paramsXML := `<SalesOrders><Parameters><IgnoreWarnings>Y</IgnoreWarnings><AlwaysUsePriceEntered>Y</AlwaysUsePriceEntered><AllowZeroPrice>Y</AllowZeroPrice>`
+	paramsXML := `<SalesOrders><Parameters><Process>Import</Process><StatusInProcess>N</StatusInProcess><ValidateOnly>N</ValidateOnly><IgnoreWarnings>W</IgnoreWarnings><ApplyIfEntireDocumentValid>Y</ApplyIfEntireDocumentValid><AlwaysUsePriceEntered>Y</AlwaysUsePriceEntered><AllowZeroPrice>Y</AllowZeroPrice>`
 	if addPostFlag {
 		paramsXML += `<PostSalesOrders>Y</PostSalesOrders>`
 	}
 	paramsXML += `</Parameters></SalesOrders>`
 
-	dataXML := fmt.Sprintf(`<SalesOrders><Orders><OrderHeader><CustomerPoNumber>%s</CustomerPoNumber><Customer>WEBS01</Customer><OrderDate>%s</OrderDate></OrderHeader><OrderDetails><StockLine><CustomerPoLine>0001</CustomerPoLine><StockCode>CBBQ0001</StockCode><OrderQty>1</OrderQty><OrderUom>EA</OrderUom><Price>9.99</Price><PriceUom>EA</PriceUom></StockLine></OrderDetails></Orders></SalesOrders>`,
+	dataXML := fmt.Sprintf(`<SalesOrders><Orders><OrderHeader><CustomerPoNumber>%s</CustomerPoNumber><OrderActionType>A</OrderActionType><Customer>WEBS01</Customer><OrderDate>%s</OrderDate><Email>test@example.com</Email><ShipAddress1>42 Bancroft Road</ShipAddress1><ShipAddress2>Unit 7</ShipAddress2><ShipAddress3>Burnley</ShipAddress3><ShipAddress4>Lancashire</ShipAddress4><ShipAddress5>GB</ShipAddress5><ShipPostalCode>BB10 2TP</ShipPostalCode></OrderHeader><OrderDetails><StockLine><CustomerPoLine>0001</CustomerPoLine><LineActionType>A</LineActionType><StockCode>CBBQ0001</StockCode><OrderQty>1</OrderQty><OrderUom>EA</OrderUom><Price>9.99</Price><PriceUom>EA</PriceUom></StockLine></OrderDetails></Orders></SalesOrders>`,
 		poRef,
 		time.Now().Format("2006-01-02"),
 	)

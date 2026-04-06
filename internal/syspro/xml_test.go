@@ -17,7 +17,7 @@ func TestBuildSORTOI_ParamsXML(t *testing.T) {
 
 	for _, want := range []string{
 		"<Process>Import</Process>",
-		"<StatusInProcess>Y</StatusInProcess>",
+		"<StatusInProcess>N</StatusInProcess>",
 		"<ValidateOnly>N</ValidateOnly>",
 		"<IgnoreWarnings>W</IgnoreWarnings>",
 		"<ApplyIfEntireDocumentValid>Y</ApplyIfEntireDocumentValid>",

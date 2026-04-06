@@ -24,8 +24,9 @@ type Config struct {
 	Port       string
 	AdminToken string
 
-	StockSyncInterval time.Duration
-	BatchInterval     time.Duration
+	StockSyncInterval      time.Duration
+	BatchInterval          time.Duration
+	FulfilmentSyncInterval time.Duration
 
 	LogLevel slog.Level
 
@@ -93,6 +94,11 @@ func Load() (*Config, error) {
 	}
 
 	c.BatchInterval, err = parseDuration("BATCH_INTERVAL", "5m")
+	if err != nil {
+		return nil, err
+	}
+
+	c.FulfilmentSyncInterval, err = parseDuration("FULFILMENT_SYNC_INTERVAL", "30m")
 	if err != nil {
 		return nil, err
 	}

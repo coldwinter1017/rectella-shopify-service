@@ -14,6 +14,7 @@ import (
 
 	"codeberg.org/speeder091/rectella-shopify-service/config"
 	"codeberg.org/speeder091/rectella-shopify-service/internal/batch"
+	"codeberg.org/speeder091/rectella-shopify-service/internal/fulfilment"
 	"codeberg.org/speeder091/rectella-shopify-service/internal/inventory"
 	"codeberg.org/speeder091/rectella-shopify-service/internal/model"
 	"codeberg.org/speeder091/rectella-shopify-service/internal/store"
@@ -50,6 +51,7 @@ func run() error {
 		"skus", len(cfg.SysproSKUs),
 		"batch_interval", cfg.BatchInterval,
 		"stock_sync_interval", cfg.StockSyncInterval,
+		"fulfilment_sync_interval", cfg.FulfilmentSyncInterval,
 		"port", cfg.Port,
 		"admin_auth", cfg.AdminToken != "",
 		"log_level", cfg.LogLevel.String(),
@@ -140,6 +142,29 @@ func run() error {
 	defer batchCancel()
 	go batchProc.Run(batchCtx)
 
+	// Start fulfilment syncer (disabled if SHOPIFY_ACCESS_TOKEN missing).
+	var fulfilmentCancel context.CancelFunc
+	if cfg.ShopifyAccessToken != "" {
+		fulfilmentClient := fulfilment.NewFulfilmentClient(
+			cfg.ShopifyStoreURL,
+			cfg.ShopifyAccessToken,
+			logger,
+		)
+		fulfilmentSyncer := fulfilment.NewFulfilmentSyncer(
+			sysproClient,
+			fulfilmentClient,
+			db,
+			cfg.FulfilmentSyncInterval,
+			logger,
+		)
+		var fulfilmentCtx context.Context
+		fulfilmentCtx, fulfilmentCancel = context.WithCancel(ctx)
+		defer fulfilmentCancel()
+		go fulfilmentSyncer.Run(fulfilmentCtx)
+	} else {
+		slog.Warn("SHOPIFY_ACCESS_TOKEN missing, fulfilment sync disabled")
+	}
+
 	// Register webhook handlers.
 	wh := webhook.NewHandler(db, cfg.ShopifyWebhookSecret, triggerCh, logger)
 	wh.Register(mux)
@@ -187,7 +212,7 @@ func run() error {
 	// Orders visibility endpoint.
 	validStatuses := map[string]bool{
 		"pending": true, "processing": true, "submitted": true,
-		"failed": true, "dead_letter": true, "cancelled": true,
+		"fulfilled": true, "failed": true, "dead_letter": true, "cancelled": true,
 	}
 	mux.HandleFunc("GET /orders", requireAdmin(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -293,6 +318,12 @@ func run() error {
 		time.AfterFunc(10*time.Second, syncCancel)
 	}
 
+	// Drain fulfilment syncer.
+	if fulfilmentCancel != nil {
+		slog.Info("draining fulfilment syncer (10s grace period)")
+		time.AfterFunc(10*time.Second, fulfilmentCancel)
+	}
+
 	// Graceful HTTP shutdown with 15s deadline.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
@@ -301,10 +332,13 @@ func run() error {
 		return fmt.Errorf("server shutdown: %w", err)
 	}
 
-	// Ensure batch processor and syncer have stopped.
+	// Ensure batch processor and syncers have stopped.
 	batchCancel()
 	if syncCancel != nil {
 		syncCancel()
+	}
+	if fulfilmentCancel != nil {
+		fulfilmentCancel()
 	}
 
 	slog.Info("server stopped cleanly")

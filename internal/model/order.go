@@ -10,6 +10,7 @@ const (
 	OrderStatusSubmitted  OrderStatus = "submitted"
 	OrderStatusFailed     OrderStatus = "failed"
 	OrderStatusDeadLetter OrderStatus = "dead_letter"
+	OrderStatusFulfilled  OrderStatus = "fulfilled"
 	OrderStatusCancelled  OrderStatus = "cancelled"
 )
 

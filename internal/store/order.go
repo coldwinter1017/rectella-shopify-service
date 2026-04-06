@@ -334,7 +334,7 @@ func (db *DB) FetchSubmittedOrders(ctx context.Context) ([]model.Order, error) {
 // UpdateOrderFulfilled marks an order as fulfilled with the Shopify fulfilment GID.
 func (db *DB) UpdateOrderFulfilled(ctx context.Context, orderID int64, shopifyFulfilmentID string) error {
 	tag, err := db.Pool.Exec(ctx,
-		`UPDATE orders SET fulfilled_at = NOW(), shopify_fulfillment_id = $2, updated_at = NOW()
+		`UPDATE orders SET status = 'fulfilled', fulfilled_at = NOW(), shopify_fulfillment_id = $2, updated_at = NOW()
 		WHERE id = $1`,
 		orderID, shopifyFulfilmentID,
 	)

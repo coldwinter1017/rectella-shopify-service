@@ -176,7 +176,9 @@ func (c *FulfilmentClient) CreateFulfillment(ctx context.Context, input Fulfilme
 			)
 			return "", nil
 		}
-		return "", fmt.Errorf("fulfillment user error: %s", ue.Message)
+	}
+	if len(result.FulfillmentCreate.UserErrors) > 0 {
+		return "", fmt.Errorf("fulfillment user error: %s", result.FulfillmentCreate.UserErrors[0].Message)
 	}
 	if result.FulfillmentCreate.Fulfillment != nil {
 		return result.FulfillmentCreate.Fulfillment.ID, nil

@@ -175,7 +175,7 @@ func run() error {
 			if cfg.AdminToken != "" {
 				token := r.Header.Get("X-Admin-Token")
 				if subtle.ConstantTimeCompare([]byte(token), []byte(cfg.AdminToken)) != 1 {
-					slog.Warn("admin auth failed", "method", r.Method, "path", r.URL.Path)
+					slog.Warn("admin auth failed", "method", r.Method, "path", r.URL.Path) //nolint:gosec // G706: slog structured fields, not interpolated
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusUnauthorized)
 					json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})

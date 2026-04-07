@@ -186,7 +186,7 @@ func runScenario(ctx context.Context, p *printer, client *http.Client, pool *pgx
 		}
 		if status == "failed" || status == "dead_letter" {
 			var lastErr string
-			pool.QueryRow(ctx, "SELECT COALESCE(last_error, '') FROM orders WHERE order_number = $1", s.name).Scan(&lastErr)
+			_ = pool.QueryRow(ctx, "SELECT COALESCE(last_error, '') FROM orders WHERE order_number = $1", s.name).Scan(&lastErr)
 			p.fail(fmt.Sprintf("expected %s, got %s: %s", s.expectDBStatus, status, lastErr))
 			return false, nil
 		}

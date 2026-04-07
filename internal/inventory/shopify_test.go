@@ -44,7 +44,7 @@ func newFakeShopify(t *testing.T) *fakeShopify {
 			Query     string         `json:"query"`
 			Variables map[string]any `json:"variables"`
 		}
-		json.Unmarshal(body, &req)
+		_ = json.Unmarshal(body, &req)
 		f.lastQuery = req.Query
 		f.lastVariables = req.Variables
 		w.Header().Set("Content-Type", "application/json")
@@ -90,9 +90,9 @@ func TestShopifyClient_SetInventoryLevels_Success(t *testing.T) {
 func TestShopifyClient_SetInventoryLevels_CachesLocation(t *testing.T) {
 	fake := newFakeShopify(t)
 	c := fake.client(t, []string{"CBBQ0001"})
-	c.SetInventoryLevels(context.Background(), map[string]int{"CBBQ0001": 100})
+	_ = c.SetInventoryLevels(context.Background(), map[string]int{"CBBQ0001": 100})
 	callsAfterFirst := fake.calls
-	c.SetInventoryLevels(context.Background(), map[string]int{"CBBQ0001": 110})
+	_ = c.SetInventoryLevels(context.Background(), map[string]int{"CBBQ0001": 110})
 	if fake.calls-callsAfterFirst != 1 {
 		t.Errorf("expected 1 call on second sync (cached), got %d", fake.calls-callsAfterFirst)
 	}
@@ -104,7 +104,7 @@ func TestShopifyClient_SetInventoryLevels_ConfiguredLocation(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	c.baseURL = fake.server.URL
 	c.httpClient = fake.server.Client()
-	c.SetInventoryLevels(context.Background(), map[string]int{"CBBQ0001": 100})
+	_ = c.SetInventoryLevels(context.Background(), map[string]int{"CBBQ0001": 100})
 	if fake.calls != 2 {
 		t.Errorf("expected 2 API calls (skip location discovery), got %d", fake.calls)
 	}

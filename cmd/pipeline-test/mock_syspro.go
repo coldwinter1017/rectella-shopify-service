@@ -21,7 +21,11 @@ func newMockSyspro(port int) *mockSyspro {
 	mux.HandleFunc("/SYSPROWCFService/Rest/Transaction/Post", m.handleTransaction)
 	mux.HandleFunc("/SYSPROWCFService/Rest/Query/Query", m.handleQuery)
 	mux.HandleFunc("/SYSPROWCFService/Rest/Logoff", m.handleLogoff)
-	m.server = &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
+	m.server = &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	return m
 }
 
@@ -39,17 +43,16 @@ func (m *mockSyspro) start() error {
 	return fmt.Errorf("mock SYSPRO did not start on port %d within 2s", m.port)
 }
 
-func (m *mockSyspro) stop() { m.server.Close() }
+func (m *mockSyspro) stop() { _ = m.server.Close() }
 
-func (m *mockSyspro) handleLogon(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "mock-session-001")
+func (m *mockSyspro) handleLogon(w http.ResponseWriter, _ *http.Request) {
+	_, _ = fmt.Fprint(w, "mock-session-001")
 }
 
-func (m *mockSyspro) handleTransaction(w http.ResponseWriter, r *http.Request) {
+func (m *mockSyspro) handleTransaction(w http.ResponseWriter, _ *http.Request) {
 	seq := m.orderSeq.Add(1)
 	w.Header().Set("Content-Type", "text/xml")
-	//nolint:gosec // test-only mock server, no user content
-	fmt.Fprintf(w, `<?xml version="1.0" encoding="Windows-1252"?>
+	_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="Windows-1252"?>
 <SalesOrders>
   <Orders><OrderHeader>
     <SalesOrder>SO-MOCK-%03d</SalesOrder>
@@ -60,12 +63,12 @@ func (m *mockSyspro) handleTransaction(w http.ResponseWriter, r *http.Request) {
 </SalesOrders>`, seq)
 }
 
-func (m *mockSyspro) handleQuery(w http.ResponseWriter, r *http.Request) {
+func (m *mockSyspro) handleQuery(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/xml")
-	fmt.Fprint(w, `<?xml version="1.0" encoding="Windows-1252"?>
+	_, _ = fmt.Fprint(w, `<?xml version="1.0" encoding="Windows-1252"?>
 <InvQuery><StockItem><StockCode>CBBQ0001</StockCode><AvailableQty>100.000</AvailableQty></StockItem></InvQuery>`)
 }
 
-func (m *mockSyspro) handleLogoff(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "true")
+func (m *mockSyspro) handleLogoff(w http.ResponseWriter, _ *http.Request) {
+	_, _ = fmt.Fprint(w, "true")
 }

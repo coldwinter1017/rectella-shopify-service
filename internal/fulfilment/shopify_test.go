@@ -104,7 +104,9 @@ func TestCreateFulfillment_WithTracking(t *testing.T) {
 			Fulfillment map[string]any `json:"fulfillment"`
 		} `json:"variables"`
 	}
-	json.Unmarshal(capturedBody, &req)
+	if err := json.Unmarshal(capturedBody, &req); err != nil {
+		t.Fatalf("failed to unmarshal captured body: %v", err)
+	}
 	tracking, ok := req.Variables.Fulfillment["trackingInfo"].(map[string]any)
 	if !ok {
 		t.Fatal("expected trackingInfo in request variables")

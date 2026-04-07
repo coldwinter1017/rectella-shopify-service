@@ -96,7 +96,7 @@ func TestStatusWriter_WriteImpliesHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sw := &statusWriter{ResponseWriter: rec, status: http.StatusOK}
 
-	sw.Write([]byte("hello"))
+	_, _ = sw.Write([]byte("hello"))
 
 	if !sw.wroteHeader {
 		t.Error("wroteHeader should be true after Write")

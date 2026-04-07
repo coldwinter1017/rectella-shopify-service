@@ -226,7 +226,9 @@ func TestSyncer_Debounce_CoalescesMultipleSignals(t *testing.T) {
 		close(done)
 	}()
 	time.Sleep(100 * time.Millisecond)
+	p.mu.Lock()
 	initialPushes := p.pushCalls
+	p.mu.Unlock()
 	triggerCh <- struct{}{}
 	time.Sleep(500 * time.Millisecond)
 	triggerCh <- struct{}{}

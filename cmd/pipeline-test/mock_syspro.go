@@ -26,12 +26,12 @@ func newMockSyspro(port int) *mockSyspro {
 }
 
 func (m *mockSyspro) start() error {
-	go m.server.ListenAndServe()
+	go func() { _ = m.server.ListenAndServe() }()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", m.port), 100*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -48,6 +48,7 @@ func (m *mockSyspro) handleLogon(w http.ResponseWriter, r *http.Request) {
 func (m *mockSyspro) handleTransaction(w http.ResponseWriter, r *http.Request) {
 	seq := m.orderSeq.Add(1)
 	w.Header().Set("Content-Type", "text/xml")
+	//nolint:gosec // test-only mock server, no user content
 	fmt.Fprintf(w, `<?xml version="1.0" encoding="Windows-1252"?>
 <SalesOrders>
   <Orders><OrderHeader>

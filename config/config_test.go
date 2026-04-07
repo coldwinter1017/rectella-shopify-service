@@ -41,7 +41,15 @@ func TestLoad_AllRequiredVars(t *testing.T) {
 }
 
 func TestLoad_MissingRequiredVars(t *testing.T) {
-	// Set nothing — all required vars missing.
+	// Explicitly unset all required vars (CI may have some set).
+	for _, key := range []string{
+		"SHOPIFY_WEBHOOK_SECRET", "SHOPIFY_API_KEY", "SHOPIFY_API_SECRET",
+		"SHOPIFY_STORE_URL", "SYSPRO_ENET_URL", "SYSPRO_OPERATOR",
+		"SYSPRO_COMPANY_ID", "DATABASE_URL",
+	} {
+		t.Setenv(key, "")
+	}
+
 	cfg, err := Load()
 	if err == nil {
 		t.Fatal("expected error for missing vars, got nil")

@@ -58,7 +58,7 @@ func main() {
 		mode = "live (real SYSPRO via VPN)"
 	}
 	var orderCount int
-	pool.QueryRow(ctx, "SELECT COUNT(*) FROM orders").Scan(&orderCount)
+	_ = pool.QueryRow(ctx, "SELECT COUNT(*) FROM orders").Scan(&orderCount)
 	p.header(mode, *target, fmt.Sprintf("connected (%d existing orders)", orderCount))
 
 	passed, failed := 0, 0
@@ -88,9 +88,9 @@ func main() {
 	p.summary(passed, failed, time.Since(totalStart), results)
 
 	if *cleanup {
-		pool.Exec(ctx, "DELETE FROM order_lines WHERE order_id IN (SELECT id FROM orders WHERE order_number LIKE '#PIPE-%')")
-		pool.Exec(ctx, "DELETE FROM orders WHERE order_number LIKE '#PIPE-%'")
-		pool.Exec(ctx, "DELETE FROM webhook_events WHERE webhook_id LIKE 'pipe-%'")
+		_, _ = pool.Exec(ctx, "DELETE FROM order_lines WHERE order_id IN (SELECT id FROM orders WHERE order_number LIKE '#PIPE-%')")
+		_, _ = pool.Exec(ctx, "DELETE FROM orders WHERE order_number LIKE '#PIPE-%'")
+		_, _ = pool.Exec(ctx, "DELETE FROM webhook_events WHERE webhook_id LIKE 'pipe-%'")
 	}
 	if failed > 0 {
 		os.Exit(1)
@@ -136,7 +136,7 @@ func runScenario(ctx context.Context, p *printer, client *http.Client, pool *pgx
 	if s.expectDBStatus == "" {
 		if s.isDuplicate {
 			var count int
-			pool.QueryRow(ctx, "SELECT COUNT(*) FROM orders WHERE order_number = $1", s.dupOriginal).Scan(&count)
+			_ = pool.QueryRow(ctx, "SELECT COUNT(*) FROM orders WHERE order_number = $1", s.dupOriginal).Scan(&count)
 			if count == 1 {
 				p.check("no new DB row (idempotent)", "OK")
 				p.pass()
@@ -146,7 +146,7 @@ func runScenario(ctx context.Context, p *printer, client *http.Client, pool *pgx
 			return false, nil
 		}
 		var count int
-		pool.QueryRow(ctx, "SELECT COUNT(*) FROM orders WHERE order_number = $1", s.name).Scan(&count)
+		_ = pool.QueryRow(ctx, "SELECT COUNT(*) FROM orders WHERE order_number = $1", s.name).Scan(&count)
 		if count == 0 {
 			p.check("no DB row", "OK")
 			p.pass()

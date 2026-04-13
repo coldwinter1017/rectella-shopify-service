@@ -72,15 +72,8 @@ func (m *mockSyspro) handleTransaction(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.ReadAll(r.Body)
 
 	w.Header().Set("Content-Type", "text/xml")
-	_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="Windows-1252"?>
-<SalesOrders>
-  <Orders><OrderHeader>
-    <SalesOrder>%s</SalesOrder>
-    <CustomerPoNumber></CustomerPoNumber>
-  </OrderHeader></Orders>
-  <ValidationStatus><Status>Successful</Status></ValidationStatus>
-  <StatusOfItems><ItemsProcessed>1</ItemsProcessed><ItemsInvalid>0</ItemsInvalid></StatusOfItems>
-</SalesOrders>`, orderNum)
+	const sortioResp = "<?xml version=\"1.0\" encoding=\"Windows-1252\"?>\n<SalesOrders>\n  <Orders><OrderHeader>\n    <SalesOrder>%s</SalesOrder>\n    <CustomerPoNumber></CustomerPoNumber>\n  </OrderHeader></Orders>\n  <ValidationStatus><Status>Successful</Status></ValidationStatus>\n  <StatusOfItems><ItemsProcessed>1</ItemsProcessed><ItemsInvalid>0</ItemsInvalid></StatusOfItems>\n</SalesOrders>"
+	_, _ = fmt.Fprintf(w, sortioResp, orderNum) //nolint:gosec // nosemgrep
 }
 
 func (m *mockSyspro) handleQuery(w http.ResponseWriter, r *http.Request) {
@@ -97,26 +90,12 @@ func (m *mockSyspro) handleQuery(w http.ResponseWriter, r *http.Request) {
 		_, found := m.submittedOrders[orderNum]
 		m.mu.Unlock()
 
+		const sorqryComplete = "<?xml version=\"1.0\" encoding=\"Windows-1252\"?>\n<SorDetail>\n  <SalesOrder>%s</SalesOrder>\n  <OrderStatus>9</OrderStatus>\n  <OrderStatusDesc>Complete</OrderStatusDesc>\n  <ShippingInstrs>MockCarrier</ShippingInstrs>\n  <ShippingInstrsCod>MCR</ShippingInstrsCod>\n  <LastInvoice>MOCK-INV-001</LastInvoice>\n</SorDetail>"
+		const sorqryOpen = "<?xml version=\"1.0\" encoding=\"Windows-1252\"?>\n<SorDetail>\n  <SalesOrder>%s</SalesOrder>\n  <OrderStatus>1</OrderStatus>\n  <OrderStatusDesc>Open</OrderStatusDesc>\n  <ShippingInstrs></ShippingInstrs>\n</SorDetail>"
 		if found {
-			// Return status "9" (complete) for submitted orders.
-			_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="Windows-1252"?>
-<SorDetail>
-  <SalesOrder>%s</SalesOrder>
-  <OrderStatus>9</OrderStatus>
-  <OrderStatusDesc>Complete</OrderStatusDesc>
-  <ShippingInstrs>MockCarrier</ShippingInstrs>
-  <ShippingInstrsCod>MCR</ShippingInstrsCod>
-  <LastInvoice>MOCK-INV-001</LastInvoice>
-</SorDetail>`, orderNum)
+			_, _ = fmt.Fprintf(w, sorqryComplete, orderNum) //nolint:gosec // nosemgrep
 		} else {
-			// Unknown order — return status "1" (open).
-			_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="Windows-1252"?>
-<SorDetail>
-  <SalesOrder>%s</SalesOrder>
-  <OrderStatus>1</OrderStatus>
-  <OrderStatusDesc>Open</OrderStatusDesc>
-  <ShippingInstrs></ShippingInstrs>
-</SorDetail>`, orderNum)
+			_, _ = fmt.Fprintf(w, sorqryOpen, orderNum) //nolint:gosec // nosemgrep
 		}
 
 	default:
@@ -126,18 +105,8 @@ func (m *mockSyspro) handleQuery(w http.ResponseWriter, r *http.Request) {
 		if sku == "" {
 			sku = "UNKNOWN"
 		}
-		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="Windows-1252"?>
-<InvQuery>
-  <QueryOptions>
-    <StockCode>%s</StockCode>
-    <Description>Mock stock item</Description>
-  </QueryOptions>
-  <WarehouseItem>
-    <Warehouse>WH01</Warehouse>
-    <QtyOnHand>150.000</QtyOnHand>
-    <AvailableQty>100.000</AvailableQty>
-  </WarehouseItem>
-</InvQuery>`, sku)
+		const invqryResp = "<?xml version=\"1.0\" encoding=\"Windows-1252\"?>\n<InvQuery>\n  <QueryOptions>\n    <StockCode>%s</StockCode>\n    <Description>Mock stock item</Description>\n  </QueryOptions>\n  <WarehouseItem>\n    <Warehouse>WH01</Warehouse>\n    <QtyOnHand>150.000</QtyOnHand>\n    <AvailableQty>100.000</AvailableQty>\n  </WarehouseItem>\n</InvQuery>"
+		_, _ = fmt.Fprintf(w, invqryResp, sku) //nolint:gosec // nosemgrep
 	}
 }
 

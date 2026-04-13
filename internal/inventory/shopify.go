@@ -259,5 +259,4 @@ func (c *ShopifyClient) SetInventoryLevels(ctx context.Context, quantities map[s
 		return fmt.Errorf("inventory user error: [%s] %s", ue.Code, ue.Message)
 	}
 	return nil
-	return nil
 }

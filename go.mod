@@ -1,6 +1,6 @@
 module github.com/trismegistus0/rectella-shopify-service
 
-go 1.26.1
+go 1.26.2
 
 require (
 	github.com/docker/docker v28.5.2+incompatible

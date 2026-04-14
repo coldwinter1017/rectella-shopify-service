@@ -98,13 +98,19 @@ func New(store OrderStore, storeURL, accessToken string, interval time.Duration,
 }
 
 // Run starts the periodic sweep loop. Blocks until ctx is cancelled.
-// The first sweep fires after one interval tick (not immediately) to avoid
-// thundering herds on service startup.
+// The first sweep fires IMMEDIATELY on startup (not after the first
+// interval tick). This is load-bearing: the recovery path for a
+// "paid-later after initial unpaid skip" order relies on a sweep running
+// promptly after service restart. Subsequent sweeps fall back to the
+// configured interval.
 func (s *Sweeper) Run(ctx context.Context) {
 	s.logger.Info("reconciliation sweeper started",
 		"interval", s.interval,
 		"lookback", s.lookback,
 	)
+
+	// First sweep — immediate.
+	s.tick(ctx)
 
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()

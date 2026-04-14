@@ -119,8 +119,25 @@ The service restarts automatically after an image swap. Shopify retries webhooks
 
 **Expected behaviour.** The service rejects orders with `financial_status` other than `paid` or `partially_paid`. This prevents shipping unpaid inventory.
 
-- If a customer completes payment later, Shopify fires another `orders/create` webhook with the updated status and the order flows normally.
-- If you see the log line `skipping unpaid order` and the customer IS paid in Shopify, investigate the `financial_status` field — Shopify may be in an unusual state.
+**IMPORTANT — how recovery actually works:**
+
+Shopify does NOT re-fire `orders/create` when the payment later succeeds. It fires `orders/paid` or `orders/updated` instead, neither of which this service subscribes to in Phase 1. That means a "paid-later" order would be silently lost unless the reconciliation sweeper catches it.
+
+**The reconciliation sweeper is the recovery path.** It polls Shopify Admin REST every `RECONCILIATION_INTERVAL` (mandatory `15m` for launch) and re-stages any orders that exist in Shopify but not in our DB. On service startup it runs immediately (not after the first interval tick), so a manual restart is the fast-recovery lever when an operator notices a missing order.
+
+**Triage: "customer paid in Shopify, nothing in our /orders":**
+
+1. Confirm the order ID is missing from our DB:
+   ```bash
+   curl -sS -H "X-Admin-Token: $ADMIN_TOKEN" \
+     "https://<service-url>/orders?status=pending" | jq '.[].shopify_order_id'
+   ```
+2. Check Shopify admin to confirm the order is marked `paid` (or `partially_paid`) and its `created_at` is within the last 48 hours.
+3. Force a reconciliation cycle: restart the service. `az webapp restart -g Shopify-RG -n rectella-shopify-service`. The sweeper runs its first tick immediately on boot.
+4. Wait 60 seconds. Verify the order now appears in `/orders?status=pending`. Batch processor picks it up within `BATCH_INTERVAL` (5 min default).
+5. If the order STILL hasn't appeared after a full reconciliation cycle, the order may have been created before `RECONCILIATION_INTERVAL`'s lookback window (default 48h). Contact Sebastian — manual re-stage is needed.
+
+**Known gap:** if `RECONCILIATION_INTERVAL` is unset or zero, this recovery path is DISABLED. The Bicep defaults it to `15m` but verify with `az webapp config appsettings list -g Shopify-RG -n rectella-shopify-service --query "[?name=='RECONCILIATION_INTERVAL']"` if in doubt.
 
 ### "Postgres is down or slow"
 

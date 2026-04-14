@@ -69,6 +69,28 @@ type sortoiStockLine struct {
 	PriceUom       string  `xml:"PriceUom"`
 }
 
+// SYSPRO 8 SORTOI field length limits (from sales-orders-reference-guide.pdf).
+// Exceeding these causes SORTOI to either truncate silently, reject the line,
+// or reject the whole order depending on the field. We truncate proactively
+// so a long Shopify customer address never turns into a launch-day failed
+// order requiring manual intervention.
+const (
+	maxCustomerPoNumber = 30 // SYSPRO CustomerPoNumber
+	maxAddressLine      = 40 // ShipAddress1-5 each
+	maxPostcode         = 15 // ShipPostalCode
+	maxEmail            = 80 // Email field
+)
+
+// truncate returns s trimmed to at most n bytes. Uses byte-length for safety
+// with SYSPRO's XSD limits (which count bytes, not UTF-8 code points).
+// Non-ASCII characters are accepted but the byte budget is enforced.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 // buildSORTOI produces the two XML strings required by the SORTOI transaction call.
 // Returns (paramsXML, dataXML, error).
 func buildSORTOI(order model.Order, lines []model.OrderLine) (string, string, error) {
@@ -115,17 +137,17 @@ func buildSORTOI(order model.Order, lines []model.OrderLine) (string, string, er
 	doc := sortoiDocument{
 		Orders: sortoiOrder{
 			Header: sortoiHeader{
-				CustomerPoNumber: order.OrderNumber,
+				CustomerPoNumber: truncate(order.OrderNumber, maxCustomerPoNumber),
 				OrderActionType:  "A",
 				Customer:         order.CustomerAccount,
 				OrderDate:        order.OrderDate.Format("2006-01-02"),
-				Email:            order.ShipEmail,
-				ShipAddress1:     order.ShipAddress1,
-				ShipAddress2:     order.ShipAddress2,
-				ShipAddress3:     order.ShipCity,
-				ShipAddress4:     order.ShipProvince,
-				ShipAddress5:     order.ShipCountry,
-				ShipPostalCode:   order.ShipPostcode,
+				Email:            truncate(order.ShipEmail, maxEmail),
+				ShipAddress1:     truncate(order.ShipAddress1, maxAddressLine),
+				ShipAddress2:     truncate(order.ShipAddress2, maxAddressLine),
+				ShipAddress3:     truncate(order.ShipCity, maxAddressLine),
+				ShipAddress4:     truncate(order.ShipProvince, maxAddressLine),
+				ShipAddress5:     truncate(order.ShipCountry, maxAddressLine),
+				ShipPostalCode:   truncate(order.ShipPostcode, maxPostcode),
 			},
 			Details: details,
 		},

@@ -207,6 +207,80 @@ func TestBuildSORTOI_DataXML_NoFreightWhenZero(t *testing.T) {
 	}
 }
 
+// TestBuildSORTOI_TruncatesLongFields verifies that customer data exceeding
+// SYSPRO SORTOI field length limits is silently truncated to the maximum,
+// rather than being sent as-is and rejected by SYSPRO. This protects against
+// real-world Shopify customer data where names, street names, city names,
+// and international postcodes routinely exceed SORTOI's schema limits.
+func TestBuildSORTOI_TruncatesLongFields(t *testing.T) {
+	order := model.Order{
+		OrderNumber:     "#THIS-IS-AN-INCREDIBLY-LONG-SHOPIFY-ORDER-NUMBER-THAT-SYSPRO-WILL-REJECT",
+		CustomerAccount: "WEBS01",
+		OrderDate:       time.Date(2026, 2, 24, 0, 0, 0, 0, time.UTC),
+		ShipEmail:       strings.Repeat("a", 100) + "@example.com",
+		ShipAddress1:    "42 Extremely Long Road That Some Customers Definitely Have Near Manchester",
+		ShipAddress2:    "Flat 9, Third Building Round The Back Past The Blue Door With The Knocker",
+		ShipCity:        "Kingston upon Hull, East Riding of Yorkshire",
+		ShipProvince:    "Greater Manchester Metropolitan County",
+		ShipCountry:     "United Kingdom of Great Britain and Northern Ireland",
+		ShipPostcode:    "SOME-VERY-LONG-INTERNATIONAL-POSTCODE-12345",
+	}
+
+	_, dataXML, err := buildSORTOI(order, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Extract each field and check byte length.
+	checks := []struct {
+		tag    string
+		maxLen int
+	}{
+		{"CustomerPoNumber", maxCustomerPoNumber},
+		{"Email", maxEmail},
+		{"ShipAddress1", maxAddressLine},
+		{"ShipAddress2", maxAddressLine},
+		{"ShipAddress3", maxAddressLine},
+		{"ShipAddress4", maxAddressLine},
+		{"ShipAddress5", maxAddressLine},
+		{"ShipPostalCode", maxPostcode},
+	}
+	for _, c := range checks {
+		open := "<" + c.tag + ">"
+		close := "</" + c.tag + ">"
+		start := strings.Index(dataXML, open)
+		end := strings.Index(dataXML, close)
+		if start == -1 || end == -1 || end <= start {
+			t.Errorf("%s tag not found in XML", c.tag)
+			continue
+		}
+		val := dataXML[start+len(open) : end]
+		if len(val) > c.maxLen {
+			t.Errorf("%s = %q (%d bytes) exceeds max %d", c.tag, val, len(val), c.maxLen)
+		}
+	}
+}
+
+// TestTruncate verifies the helper directly.
+func TestTruncate(t *testing.T) {
+	cases := []struct {
+		in  string
+		n   int
+		out string
+	}{
+		{"", 5, ""},
+		{"abc", 5, "abc"},
+		{"abcdef", 3, "abc"},
+		{"hello world", 5, "hello"},
+		{"exact", 5, "exact"},
+	}
+	for _, tc := range cases {
+		if got := truncate(tc.in, tc.n); got != tc.out {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.out)
+		}
+	}
+}
+
 // minimalOrder returns an Order with only the mandatory fields set.
 func minimalOrder() model.Order {
 	return model.Order{

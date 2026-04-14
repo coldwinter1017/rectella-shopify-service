@@ -116,7 +116,7 @@ func loadSysproSKUs(flagVal, fileVal string) ([]string, error) {
 	}
 	var raw string
 	if fileVal != "" {
-		b, err := os.ReadFile(fileVal)
+		b, err := os.ReadFile(fileVal) //nolint:gosec // G304: CLI tool, operator-supplied path is intentional
 		if err != nil {
 			return nil, fmt.Errorf("reading SYSPRO SKU file: %w", err)
 		}
@@ -168,14 +168,14 @@ func fetchShopifySKUs(ctx context.Context, storeURL, token string) ([]string, er
 
 	seen := make(map[string]bool)
 	for pageURL != "" {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil) //nolint:gosec // G704: URL derived from Shopify Link header pagination, not user input
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("X-Shopify-Access-Token", token)
 		req.Header.Set("Accept", "application/json")
 
-		resp, err := client.Do(req)
+		resp, err := client.Do(req) //nolint:gosec // G704: see above
 		if err != nil {
 			return nil, err
 		}

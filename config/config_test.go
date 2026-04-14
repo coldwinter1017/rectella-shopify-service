@@ -66,6 +66,41 @@ func TestLoad_MissingRequiredVars(t *testing.T) {
 	}
 }
 
+func TestLoad_PlaceholderValuesRejected(t *testing.T) {
+	cases := []struct {
+		name    string
+		key     string
+		value   string
+		wantMsg string
+	}{
+		{"company_id_placeholder", "SYSPRO_COMPANY_ID", "PLACEHOLDER-waiting-on-sarah", "SYSPRO_COMPANY_ID"},
+		{"webhook_secret_placeholder", "SHOPIFY_WEBHOOK_SECRET", "PLACEHOLDER", "SHOPIFY_WEBHOOK_SECRET"},
+		{"database_url_placeholder", "DATABASE_URL", "PLACEHOLDER-fill-me-in", "DATABASE_URL"},
+		{"syspro_password_placeholder", "SYSPRO_PASSWORD", "PLACEHOLDER-password", "SYSPRO_PASSWORD"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv(tc.key, tc.value)
+
+			cfg, err := Load()
+			if err == nil {
+				t.Fatalf("expected error for PLACEHOLDER value, got nil (cfg=%+v)", cfg)
+			}
+			if cfg != nil {
+				t.Error("expected nil config on error")
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error %q does not mention %q", err.Error(), tc.wantMsg)
+			}
+			if !strings.Contains(err.Error(), "PLACEHOLDER") {
+				t.Errorf("error %q does not mention PLACEHOLDER", err.Error())
+			}
+		})
+	}
+}
+
 func TestLoad_BlankPasswordIsValid(t *testing.T) {
 	setRequiredEnv(t)
 	// SYSPRO_PASSWORD intentionally not set — should NOT appear in missing vars.

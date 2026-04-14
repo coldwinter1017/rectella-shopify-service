@@ -40,11 +40,28 @@ type Config struct {
 
 func Load() (*Config, error) {
 	var missing []string
+	var placeholder []string
 
+	// get returns the value of an env var and records it as missing if empty.
+	// Values starting with "PLACEHOLDER" are also flagged — these are emitted
+	// by Bicep/IaC when a secret was not populated at deploy time, and we
+	// want to fail fast rather than boot with broken auth.
 	get := func(key string) string {
 		v := os.Getenv(key)
 		if v == "" {
 			missing = append(missing, key)
+		} else if strings.HasPrefix(v, "PLACEHOLDER") {
+			placeholder = append(placeholder, key)
+		}
+		return v
+	}
+
+	// checkPlaceholder guards optional-at-boot values (like SYSPRO_PASSWORD
+	// which can legitimately be empty in local tests) against the same
+	// PLACEHOLDER footgun.
+	checkPlaceholder := func(key, v string) string {
+		if strings.HasPrefix(v, "PLACEHOLDER") {
+			placeholder = append(placeholder, key)
 		}
 		return v
 	}
@@ -57,7 +74,7 @@ func Load() (*Config, error) {
 
 		SysproEnetURL:   get("SYSPRO_ENET_URL"),
 		SysproOperator:  get("SYSPRO_OPERATOR"),
-		SysproPassword:  os.Getenv("SYSPRO_PASSWORD"), // blank password is valid
+		SysproPassword:  checkPlaceholder("SYSPRO_PASSWORD", os.Getenv("SYSPRO_PASSWORD")), // blank password is valid, PLACEHOLDER is not
 		SysproCompanyID: get("SYSPRO_COMPANY_ID"),
 
 		DatabaseURL: get("DATABASE_URL"),
@@ -86,6 +103,9 @@ func Load() (*Config, error) {
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %v", missing)
+	}
+	if len(placeholder) > 0 {
+		return nil, fmt.Errorf("environment variables contain PLACEHOLDER values (real values not populated): %v", placeholder)
 	}
 
 	var err error

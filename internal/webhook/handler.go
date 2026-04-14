@@ -155,6 +155,15 @@ func (h *Handler) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 			h.respond(w, http.StatusOK, "status", "ok")
 			return
 		}
+		if errors.Is(err, store.ErrDuplicateOrder) {
+			h.logger.Info("duplicate shopify order ignored",
+				"webhook_id", webhookID,
+				"shopify_order_id", payload.ID,
+				"order_number", payload.Name,
+			)
+			h.respond(w, http.StatusOK, "status", "duplicate_order")
+			return
+		}
 		h.logger.Error("persisting order", "error", err, "webhook_id", webhookID)
 		h.respond(w, http.StatusInternalServerError, "error", "internal error")
 		return

@@ -13,6 +13,14 @@ import (
 // ErrDuplicateWebhook is returned when a webhook event has already been recorded.
 var ErrDuplicateWebhook = errors.New("duplicate webhook")
 
+// ErrDuplicateOrder is returned when an orders row with the same shopify_order_id
+// already exists. Different from ErrDuplicateWebhook (which fires on webhook_id
+// replay): this catches the case where Shopify delivers a fresh webhook for an
+// order we've already persisted (customer edit, Shopify retry under new webhook
+// id, "Send test notification" replay). The handler treats this as a no-op 200
+// so Shopify stops retrying.
+var ErrDuplicateOrder = errors.New("duplicate shopify order id")
+
 // WebhookExists checks whether a webhook event with the given ID has already been stored.
 func (db *DB) WebhookExists(ctx context.Context, webhookID string) (bool, error) {
 	var exists bool
@@ -99,6 +107,10 @@ func (db *DB) CreateOrder(ctx context.Context, event model.WebhookEvent, order m
 		order.RawPayload, order.OrderDate,
 	).Scan(&orderID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrDuplicateOrder
+		}
 		return fmt.Errorf("inserting order: %w", err)
 	}
 

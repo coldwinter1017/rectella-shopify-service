@@ -259,6 +259,23 @@ func TestHandleOrderCreate(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			// Defect K: Shopify delivers the same shopify_order_id under a
+			// fresh webhook_id (customer edit replay, Send test notification
+			// replay, or transient-error retry). Before the fix this returned
+			// 500 and Shopify would retry for 48h then drop. Now returns 200
+			// so Shopify stops retrying.
+			name:      "duplicate shopify_order_id under fresh webhook id",
+			body:      validPayload,
+			webhookID: "wh-dup-order",
+			signBody:  true,
+			store: &mockStore{
+				createOrderFn: func(ctx context.Context, event model.WebhookEvent, order model.Order, lines []model.OrderLine) error {
+					return store.ErrDuplicateOrder
+				},
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
 			name: "order with shipping lines",
 			body: `{
 				"id": 5551234567891,

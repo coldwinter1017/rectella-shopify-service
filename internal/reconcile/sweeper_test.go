@@ -141,6 +141,39 @@ func TestSweep_AllPresent(t *testing.T) {
 	}
 }
 
+// TestSweep_SkipsExistingFailedOrders documents the intent: orders in
+// failed or dead_letter status must NOT be re-staged by the reconciliation
+// sweep — the correct recovery path is the admin /orders/{id}/retry
+// endpoint, not re-insertion from Shopify (which would double-submit to
+// SYSPRO if the failed order had already been persisted). The mockStore's
+// `existing` map is status-agnostic by design, mirroring the real
+// ShopifyOrdersExist query which checks only shopify_order_id presence.
+// If a future refactor tightens that query to filter by status, this test
+// will fail and force a re-evaluation.
+func TestSweep_SkipsExistingFailedOrders(t *testing.T) {
+	srv := newFakeShopify(t, threeOrdersBody)
+	defer srv.Close()
+
+	// Order 1002 exists in DB in 'failed' state. Sweeper must skip it.
+	ms := &mockStore{existing: map[int64]bool{1002: true}}
+	sw := New(ms, "ignored", "shpat_test", time.Minute, testLogger(), WithBaseURL(srv.URL))
+
+	if err := sw.Sweep(context.Background()); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	// Should stage 1001 and 1003 (missing), skip 1002 (already in DB
+	// regardless of its status).
+	if len(ms.created) != 2 {
+		t.Fatalf("expected 2 orders staged, got %d", len(ms.created))
+	}
+	for _, o := range ms.created {
+		if o.ShopifyOrderID == 1002 {
+			t.Errorf("sweeper must NOT re-stage 1002 (already in DB as failed)")
+		}
+	}
+}
+
 // TestSweep_SkipsUnpaid: unpaid orders bypass the stage step even when missing.
 func TestSweep_SkipsUnpaid(t *testing.T) {
 	body := `{

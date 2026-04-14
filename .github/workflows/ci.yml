@@ -77,7 +77,10 @@ jobs:
   publish:
     needs: [test, lint, security]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    # Publish sha-tagged images on every push (any branch). Only master
+    # additionally gets the moving :latest tag. This lets feature branches
+    # deploy to staging or pin to a specific commit without cutting a release.
+    if: github.event_name == 'push'
     permissions:
       contents: read
       packages: write
@@ -99,7 +102,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=sha,prefix=sha-
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

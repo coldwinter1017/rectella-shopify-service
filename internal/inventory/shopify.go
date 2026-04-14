@@ -137,6 +137,66 @@ func (c *ShopifyClient) resolveLocation(ctx context.Context) error {
 	return fmt.Errorf("no active Shopify locations found")
 }
 
+// ListAllSKUs paginates through every product variant in the store and
+// returns the unique, non-empty SKUs. Used by the syncer for dynamic
+// stock-code discovery (replacing a static SYSPRO_SKUS env var). Shopify
+// is treated as the source of truth for "what's sellable"; the result is
+// then fed to INVQRY per SKU to fetch warehouse stock from SYSPRO.
+//
+// Uses the productVariants GraphQL connection with cursor pagination.
+// Variants with empty SKUs are skipped.
+func (c *ShopifyClient) ListAllSKUs(ctx context.Context) ([]string, error) {
+	seen := make(map[string]bool)
+	cursor := ""
+	for {
+		afterClause := ""
+		if cursor != "" {
+			afterClause = fmt.Sprintf(`, after: %q`, cursor)
+		}
+		q := fmt.Sprintf(`{
+		  productVariants(first: 250%s) {
+		    edges { cursor node { sku } }
+		    pageInfo { hasNextPage endCursor }
+		  }
+		}`, afterClause)
+		data, err := c.graphql(ctx, q, nil)
+		if err != nil {
+			return nil, fmt.Errorf("querying product variants: %w", err)
+		}
+		var result struct {
+			ProductVariants struct {
+				Edges []struct {
+					Cursor string `json:"cursor"`
+					Node   struct {
+						SKU string `json:"sku"`
+					} `json:"node"`
+				} `json:"edges"`
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+			} `json:"productVariants"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil {
+			return nil, fmt.Errorf("parsing product variants: %w", err)
+		}
+		for _, edge := range result.ProductVariants.Edges {
+			if s := strings.TrimSpace(edge.Node.SKU); s != "" {
+				seen[s] = true
+			}
+		}
+		if !result.ProductVariants.PageInfo.HasNextPage {
+			break
+		}
+		cursor = result.ProductVariants.PageInfo.EndCursor
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 func (c *ShopifyClient) resolveInventoryItems(ctx context.Context) error {
 	var parts []string
 	for _, sku := range c.skus {

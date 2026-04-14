@@ -109,47 +109,58 @@ func run() error {
 		logger,
 	)
 
-	// Set up stock sync (disabled gracefully if SYSPRO_SKUS is empty).
+	// Set up stock sync. Two modes:
+	//   - dynamic:  SYSPRO_SKUS empty, SYSPRO_WAREHOUSE set → discover the
+	//               SKU list from Shopify productVariants on each cycle
+	//   - static:   SYSPRO_SKUS non-empty → sync exactly those SKUs
+	// Either mode needs SHOPIFY_ACCESS_TOKEN + SYSPRO_WAREHOUSE.
 	triggerCh := make(chan struct{}, 1)
 	var syncCancel context.CancelFunc
 
-	if len(cfg.SysproSKUs) > 0 {
-		if cfg.ShopifyAccessToken == "" {
-			slog.Warn("SYSPRO_SKUS configured but SHOPIFY_ACCESS_TOKEN missing, stock sync disabled")
-		} else if cfg.SysproWarehouse == "" {
-			slog.Warn("SYSPRO_SKUS configured but SYSPRO_WAREHOUSE missing, stock sync disabled")
-		} else {
-			var invOpts []inventory.ShopifyOption
-			if cfg.ShopifyBaseURL != "" {
-				invOpts = append(invOpts, inventory.WithBaseURL(cfg.ShopifyBaseURL))
-			}
-			shopifyClient := inventory.NewShopifyClient(
-				cfg.ShopifyStoreURL,
-				cfg.ShopifyAccessToken,
-				cfg.ShopifyLocationID,
-				cfg.SysproSKUs,
-				logger,
-				invOpts...,
-			)
-
-			syncer := inventory.NewSyncer(
-				sysproClient, // *EnetClient satisfies InventoryQuerier
-				shopifyClient,
-				db,
-				cfg.StockSyncInterval,
-				cfg.SysproWarehouse,
-				cfg.SysproSKUs,
-				triggerCh,
-				logger,
-			)
-
-			var syncCtx context.Context
-			syncCtx, syncCancel = context.WithCancel(ctx)
-			defer syncCancel()
-			go syncer.Run(syncCtx)
+	switch {
+	case cfg.ShopifyAccessToken == "":
+		slog.Warn("stock sync disabled: SHOPIFY_ACCESS_TOKEN missing")
+	case cfg.SysproWarehouse == "":
+		slog.Warn("stock sync disabled: SYSPRO_WAREHOUSE missing")
+	default:
+		var invOpts []inventory.ShopifyOption
+		if cfg.ShopifyBaseURL != "" {
+			invOpts = append(invOpts, inventory.WithBaseURL(cfg.ShopifyBaseURL))
 		}
-	} else {
-		slog.Warn("SYSPRO_SKUS not configured, stock sync disabled")
+		shopifyClient := inventory.NewShopifyClient(
+			cfg.ShopifyStoreURL,
+			cfg.ShopifyAccessToken,
+			cfg.ShopifyLocationID,
+			cfg.SysproSKUs,
+			logger,
+			invOpts...,
+		)
+
+		var lister inventory.SKULister
+		if len(cfg.SysproSKUs) == 0 {
+			// Dynamic mode: Shopify is the source of truth for the SKU list.
+			lister = shopifyClient
+			slog.Info("stock sync enabled", "mode", "dynamic", "warehouse", cfg.SysproWarehouse)
+		} else {
+			slog.Info("stock sync enabled", "mode", "static", "sku_count", len(cfg.SysproSKUs), "warehouse", cfg.SysproWarehouse)
+		}
+
+		syncer := inventory.NewSyncer(
+			sysproClient, // *EnetClient satisfies InventoryQuerier
+			shopifyClient,
+			db,
+			lister,
+			cfg.StockSyncInterval,
+			cfg.SysproWarehouse,
+			cfg.SysproSKUs,
+			triggerCh,
+			logger,
+		)
+
+		var syncCtx context.Context
+		syncCtx, syncCancel = context.WithCancel(ctx)
+		defer syncCancel()
+		go syncer.Run(syncCtx)
 	}
 
 	// Start batch processor.

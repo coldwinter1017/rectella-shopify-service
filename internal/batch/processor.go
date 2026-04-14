@@ -104,6 +104,15 @@ func (p *Processor) ProcessBatch(ctx context.Context) error {
 	}()
 
 	for _, ow := range orders {
+		// Honour shutdown signals between orders. If the context has been
+		// cancelled (e.g. SIGTERM during graceful drain), stop starting new
+		// SORTOI calls. The currently-in-flight call is allowed to complete
+		// so we never leave an order ambiguously "processing" with no
+		// terminal status transition.
+		if ctx.Err() != nil {
+			p.logger.Info("batch draining on context cancellation", "remaining", len(orders))
+			break
+		}
 		if err := p.submitOrder(ctx, session, ow); err != nil {
 			p.logger.Warn("batch stopped on infra error",
 				"order_id", ow.Order.ID,

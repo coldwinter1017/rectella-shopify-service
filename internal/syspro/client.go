@@ -53,24 +53,29 @@ type sortoiResponse struct {
 // callers (batch processor, stock syncer, fulfilment syncer) cannot evict
 // each other's sessions.
 type EnetClient struct {
-	baseURL    string
-	operator   string
-	password   string
-	companyID  string
-	logger     *slog.Logger
-	httpClient *http.Client
-	sessionMu  sync.Mutex
+	baseURL         string
+	operator        string
+	password        string
+	companyID       string
+	companyPassword string
+	logger          *slog.Logger
+	httpClient      *http.Client
+	sessionMu       sync.Mutex
 }
 
 // NewEnetClient constructs a Client backed by the real SYSPRO e.net REST API.
-func NewEnetClient(baseURL, operator, password, companyID string, logger *slog.Logger) *EnetClient {
+// `password` is the operator password (may be empty); `companyPassword` is the
+// SYSPRO company-level password and is required for companies that enforce it
+// (e.g. live `RIL`). Pass "" when the target company has no company password.
+func NewEnetClient(baseURL, operator, password, companyID, companyPassword string, logger *slog.Logger) *EnetClient {
 	return &EnetClient{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		operator:   operator,
-		password:   password,
-		companyID:  companyID,
-		logger:     logger,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		baseURL:         strings.TrimRight(baseURL, "/"),
+		operator:        operator,
+		password:        password,
+		companyID:       companyID,
+		companyPassword: companyPassword,
+		logger:          logger,
+		httpClient:      &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -106,11 +111,18 @@ func (c *EnetClient) SubmitSalesOrder(ctx context.Context, order model.Order, li
 }
 
 // logon calls GET /Logon and returns the session GUID.
+//
+// SYSPRO e.net distinguishes the operator password (tied to the SYSPRO user)
+// from the company password (tied to the company record). Both are passed
+// even when blank — SYSPRO is lenient about empty values but strict about
+// missing parameters. Valid GUIDs start with "SYS"; any other prefix (e.g.
+// "ERROR:") indicates the logon was rejected and we surface it as an error.
 func (c *EnetClient) logon(ctx context.Context) (string, error) {
 	params := url.Values{
 		"Operator":         {c.operator},
 		"OperatorPassword": {c.password},
 		"CompanyId":        {c.companyID},
+		"CompanyPassword":  {c.companyPassword},
 	}
 	body, err := c.get(ctx, "/Logon", params)
 	if err != nil {
@@ -124,6 +136,12 @@ func (c *EnetClient) logon(ctx context.Context) (string, error) {
 	}
 	if guid == "" {
 		return "", fmt.Errorf("logon returned empty session GUID")
+	}
+	// SYSPRO e.net returns a GUID on success and a string starting with
+	// "ERROR" on failure (e.g. "ERROR: Invalid operator password") without
+	// an HTTP error status — hence the sniff.
+	if strings.HasPrefix(guid, "ERROR") {
+		return "", fmt.Errorf("logon rejected by SYSPRO: %s", guid)
 	}
 	return guid, nil
 }

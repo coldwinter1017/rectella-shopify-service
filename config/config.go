@@ -15,10 +15,11 @@ type Config struct {
 	ShopifyAPISecret     string
 	ShopifyStoreURL      string
 
-	SysproEnetURL   string
-	SysproOperator  string
-	SysproPassword  string
-	SysproCompanyID string
+	SysproEnetURL         string
+	SysproOperator        string
+	SysproPassword        string
+	SysproCompanyID       string
+	SysproCompanyPassword string
 
 	DatabaseURL string
 
@@ -91,10 +92,11 @@ func Load() (*Config, error) {
 		ShopifyAPISecret:     os.Getenv("SHOPIFY_API_SECRET"),
 		ShopifyStoreURL:      get("SHOPIFY_STORE_URL"),
 
-		SysproEnetURL:   get("SYSPRO_ENET_URL"),
-		SysproOperator:  get("SYSPRO_OPERATOR"),
-		SysproPassword:  checkPlaceholder("SYSPRO_PASSWORD", os.Getenv("SYSPRO_PASSWORD")), // blank password is valid, PLACEHOLDER is not
-		SysproCompanyID: get("SYSPRO_COMPANY_ID"),
+		SysproEnetURL:         get("SYSPRO_ENET_URL"),
+		SysproOperator:        get("SYSPRO_OPERATOR"),
+		SysproPassword:        checkPlaceholder("SYSPRO_PASSWORD", os.Getenv("SYSPRO_PASSWORD")), // blank operator password is valid, PLACEHOLDER is not
+		SysproCompanyID:       get("SYSPRO_COMPANY_ID"),
+		SysproCompanyPassword: checkPlaceholder("SYSPRO_COMPANY_PASSWORD", os.Getenv("SYSPRO_COMPANY_PASSWORD")), // blank is valid for companies without a company-level password
 
 		DatabaseURL: get("DATABASE_URL"),
 	}

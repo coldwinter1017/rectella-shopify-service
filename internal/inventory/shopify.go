@@ -197,39 +197,64 @@ func (c *ShopifyClient) ListAllSKUs(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-func (c *ShopifyClient) resolveInventoryItems(ctx context.Context) error {
-	var parts []string
-	for _, sku := range c.skus {
+// resolveInventoryItems populates c.skuMap (SKU -> inventory item GID) for
+// the given list of SKUs. Called with the static c.skus in legacy mode, and
+// with the dynamic SKU list from SetInventoryLevels in dynamic mode.
+// Queries are chunked to keep the GraphQL query under Shopify's length
+// limits and to respect the `first: 250` limit on the inventoryItems
+// connection.
+func (c *ShopifyClient) resolveInventoryItems(ctx context.Context, skus []string) error {
+	const chunkSize = 100 // keep the "sku:'...' OR" query short enough
+
+	// Filter to SKUs not yet in the map.
+	var pending []string
+	for _, sku := range skus {
 		if _, ok := c.skuMap[sku]; !ok {
-			parts = append(parts, fmt.Sprintf("sku:'%s'", sku))
+			pending = append(pending, sku)
 		}
 	}
-	if len(parts) == 0 {
+	if len(pending) == 0 {
 		return nil
 	}
-	skuQuery := strings.Join(parts, " OR ")
-	q := fmt.Sprintf(`{ inventoryItems(first: 50, query: %q) { edges { node { id sku } } } }`, skuQuery)
-	data, err := c.graphql(ctx, q, nil)
-	if err != nil {
-		return fmt.Errorf("querying inventory items: %w", err)
+
+	for start := 0; start < len(pending); start += chunkSize {
+		end := start + chunkSize
+		if end > len(pending) {
+			end = len(pending)
+		}
+		chunk := pending[start:end]
+
+		parts := make([]string, 0, len(chunk))
+		for _, sku := range chunk {
+			parts = append(parts, fmt.Sprintf("sku:'%s'", sku))
+		}
+		skuQuery := strings.Join(parts, " OR ")
+		q := fmt.Sprintf(`{ inventoryItems(first: 250, query: %q) { edges { node { id sku } } } }`, skuQuery)
+
+		data, err := c.graphql(ctx, q, nil)
+		if err != nil {
+			return fmt.Errorf("querying inventory items: %w", err)
+		}
+		var result struct {
+			InventoryItems struct {
+				Edges []struct {
+					Node struct {
+						ID  string `json:"id"`
+						SKU string `json:"sku"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"inventoryItems"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil {
+			return fmt.Errorf("parsing inventory items: %w", err)
+		}
+		for _, edge := range result.InventoryItems.Edges {
+			c.skuMap[edge.Node.SKU] = edge.Node.ID
+		}
 	}
-	var result struct {
-		InventoryItems struct {
-			Edges []struct {
-				Node struct {
-					ID  string `json:"id"`
-					SKU string `json:"sku"`
-				} `json:"node"`
-			} `json:"edges"`
-		} `json:"inventoryItems"`
-	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return fmt.Errorf("parsing inventory items: %w", err)
-	}
-	for _, edge := range result.InventoryItems.Edges {
-		c.skuMap[edge.Node.SKU] = edge.Node.ID
-	}
-	for _, sku := range c.skus {
+
+	// Warn about any SKUs we still couldn't resolve after the lookup.
+	for _, sku := range pending {
 		if _, ok := c.skuMap[sku]; !ok {
 			c.logger.Warn("SKU not found in Shopify inventory", "sku", sku)
 		}
@@ -246,10 +271,16 @@ func (c *ShopifyClient) SetInventoryLevels(ctx context.Context, quantities map[s
 			return fmt.Errorf("resolving location: %w", err)
 		}
 	}
-	if len(c.skuMap) < len(c.skus) {
-		if err := c.resolveInventoryItems(ctx); err != nil {
-			c.logger.Warn("resolving inventory items", "error", err)
-		}
+	// Resolve inventory item GIDs for the SKUs in this push. In dynamic
+	// mode `c.skus` is empty; we must use the keys of the quantities map
+	// to look up any SKUs we haven't seen before.
+	needed := make([]string, 0, len(quantities)+len(c.skus))
+	needed = append(needed, c.skus...)
+	for sku := range quantities {
+		needed = append(needed, sku)
+	}
+	if err := c.resolveInventoryItems(ctx, needed); err != nil {
+		c.logger.Warn("resolving inventory items", "error", err)
 	}
 	locationID := c.locationID
 	skuMap := make(map[string]string, len(c.skuMap))

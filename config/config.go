@@ -37,6 +37,11 @@ type Config struct {
 	ShopifyBaseURL     string // Override full GraphQL URL (testing/staging). Constructed from StoreURL if empty.
 	SysproWarehouse    string
 	SysproSKUs         []string
+
+	// SQLServerDSN is the primary source for the WEBS warehouse stock-code
+	// list (Sarah's view `bq_WEBS_Whs_QoH` on RIL-DB01). Empty = disabled,
+	// the syncer falls through to Shopify-first lister then the static slice.
+	SQLServerDSN string
 }
 
 func Load() (*Config, error) {
@@ -91,6 +96,7 @@ func Load() (*Config, error) {
 	c.ShopifyLocationID = os.Getenv("SHOPIFY_LOCATION_ID")
 	c.ShopifyBaseURL = os.Getenv("SHOPIFY_BASE_URL")
 	c.SysproWarehouse = os.Getenv("SYSPRO_WAREHOUSE")
+	c.SQLServerDSN = checkPlaceholder("SQLSERVER_DSN", os.Getenv("SQLSERVER_DSN"))
 
 	// Parse comma-separated SKU list.
 	if raw := os.Getenv("SYSPRO_SKUS"); raw != "" {

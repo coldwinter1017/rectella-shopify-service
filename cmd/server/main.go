@@ -136,14 +136,34 @@ func run() error {
 			invOpts...,
 		)
 
+		// Lister precedence: SQL Server (Sarah's WEBS warehouse view) →
+		// Shopify (productVariants pagination) → static slice from env.
 		var lister inventory.SKULister
-		if len(cfg.SysproSKUs) == 0 {
-			// Dynamic mode: Shopify is the source of truth for the SKU list.
-			lister = shopifyClient
-			slog.Info("stock sync enabled", "mode", "dynamic", "warehouse", cfg.SysproWarehouse)
-		} else {
-			slog.Info("stock sync enabled", "mode", "static", "sku_count", len(cfg.SysproSKUs), "warehouse", cfg.SysproWarehouse)
+		listerMode := "static"
+		if cfg.SQLServerDSN != "" {
+			sqlLister, err := inventory.NewSQLServerLister(cfg.SQLServerDSN, logger)
+			if err != nil {
+				slog.Warn("sql server lister init failed, falling back", "error", err)
+			} else if sqlLister != nil {
+				if err := sqlLister.Ping(ctx); err != nil {
+					slog.Warn("sql server lister ping failed, falling back", "error", err)
+					_ = sqlLister.Close()
+				} else {
+					lister = sqlLister
+					listerMode = "sql"
+					defer sqlLister.Close() //nolint:errcheck // best-effort close at shutdown
+				}
+			}
 		}
+		if lister == nil && len(cfg.SysproSKUs) == 0 {
+			lister = shopifyClient
+			listerMode = "shopify"
+		}
+		slog.Info("stock sync enabled",
+			"mode", listerMode,
+			"warehouse", cfg.SysproWarehouse,
+			"static_sku_count", len(cfg.SysproSKUs),
+		)
 
 		syncer := inventory.NewSyncer(
 			sysproClient, // *EnetClient satisfies InventoryQuerier

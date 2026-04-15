@@ -55,6 +55,7 @@ type sortoiHeader struct {
 	Customer          string `xml:"Customer"`
 	OrderDate         string `xml:"OrderDate"` // YYYY-MM-DD
 	Email             string `xml:"Email,omitempty"`
+	Telephone         string `xml:"Telephone,omitempty"`         // Customer phone from Shopify shipping address
 	ShippingInstrs    string `xml:"ShippingInstrs,omitempty"`    // Carrier from Shopify shipping method
 	ShippingInstrsCod string `xml:"ShippingInstrsCod,omitempty"` // Carrier code if available
 	// Ship-to address from Shopify (overrides customer default when populated)
@@ -97,6 +98,7 @@ const (
 	maxAddressLine      = 40 // ShipAddress1-5 each
 	maxPostcode         = 15 // ShipPostalCode
 	maxEmail            = 80 // Email field
+	maxTelephone        = 20 // Telephone field
 )
 
 // truncate returns s trimmed to at most n bytes. Uses byte-length for safety
@@ -120,10 +122,10 @@ func extractShippingInstrs(rawPayload []byte) (title string, code string) {
 	}
 	var p struct {
 		ShippingLines []struct {
-			Title              string `json:"title"`
-			Code               string `json:"code"`
-			CarrierIdentifier  string `json:"carrier_identifier"`
-			Source             string `json:"source"`
+			Title             string `json:"title"`
+			Code              string `json:"code"`
+			CarrierIdentifier string `json:"carrier_identifier"`
+			Source            string `json:"source"`
 		} `json:"shipping_lines"`
 	}
 	if err := json.Unmarshal(rawPayload, &p); err != nil {
@@ -213,6 +215,7 @@ func buildSORTOI(order model.Order, lines []model.OrderLine, warehouse, allocati
 				Customer:          order.CustomerAccount,
 				OrderDate:         order.OrderDate.Format("2006-01-02"),
 				Email:             truncate(order.ShipEmail, maxEmail),
+				Telephone:         truncate(order.ShipPhone, maxTelephone),
 				ShippingInstrs:    truncate(shipTitle, maxShippingInstrs),
 				ShippingInstrsCod: truncate(shipCode, maxShippingInstrsCod),
 				ShipAddress1:      truncate(order.ShipAddress1, maxAddressLine),

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/trismegistus0/rectella-shopify-service/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/trismegistus0/rectella-shopify-service/internal/model"
 )
 
 // ErrDuplicateWebhook is returned when a webhook event has already been recorded.

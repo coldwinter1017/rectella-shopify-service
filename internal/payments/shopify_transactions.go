@@ -64,15 +64,15 @@ func (f *TransactionsFetcher) WithBaseURL(base string) *TransactionsFetcher {
 // Amount strings are parsed to float64 at the boundary.
 type shopifyTransactionsResponse struct {
 	Transactions []struct {
-		ID           int64     `json:"id"`
-		OrderID      int64     `json:"order_id"`
-		Kind         string    `json:"kind"`
-		Status       string    `json:"status"`
-		Amount       string    `json:"amount"`
-		Currency     string    `json:"currency"`
-		Gateway      string    `json:"gateway"`
-		ProcessedAt  time.Time `json:"processed_at"`
-		Receipt      struct {
+		ID          int64     `json:"id"`
+		OrderID     int64     `json:"order_id"`
+		Kind        string    `json:"kind"`
+		Status      string    `json:"status"`
+		Amount      string    `json:"amount"`
+		Currency    string    `json:"currency"`
+		Gateway     string    `json:"gateway"`
+		ProcessedAt time.Time `json:"processed_at"`
+		Receipt     struct {
 			Charges struct {
 				Data []struct {
 					BalanceTransaction struct {

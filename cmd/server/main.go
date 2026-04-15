@@ -205,6 +205,42 @@ func run() error {
 		slog.Info("reconciliation sweep disabled (RECONCILIATION_INTERVAL unset)")
 	}
 
+	// Start daily cash-receipt email reporter. Disabled gracefully
+	// unless SMTP config + recipients are all present. This exists as
+	// the MVP stopgap while ARSPAY automation is blocked on Sarah's
+	// spec + Liz's sign-off — credit control still gets a daily CSV.
+	var reportCancel context.CancelFunc
+	if cfg.SMTPHost != "" && cfg.SMTPPort != 0 && cfg.SMTPFrom != "" && len(cfg.CreditControlTo) > 0 && cfg.ShopifyAccessToken != "" {
+		mailer := payments.NewMailer(payments.MailerConfig{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+			UseTLS:   cfg.SMTPUseTLS,
+		})
+		fetcher := payments.NewTransactionsFetcher(cfg.ShopifyStoreURL, cfg.ShopifyAccessToken, logger)
+		reporter, err := payments.NewDailyReporter(payments.DailyReporterConfig{
+			Source:     fetcher,
+			Mailer:     mailer,
+			Recipients: cfg.CreditControlTo,
+			StoreName:  cfg.ShopifyStoreURL,
+			Hour:       cfg.DailyReportHour,
+			Logger:     logger,
+		})
+		if err != nil {
+			slog.Warn("daily report disabled", "error", err)
+		} else {
+			var reportCtx context.Context
+			reportCtx, reportCancel = context.WithCancel(ctx)
+			defer reportCancel()
+			go reporter.Run(reportCtx)
+			slog.Info("daily report enabled", "hour_utc", cfg.DailyReportHour, "recipients", len(cfg.CreditControlTo))
+		}
+	} else {
+		slog.Info("daily report disabled (SMTP or CREDIT_CONTROL_TO not configured)")
+	}
+
 	// Start payments syncer (ARSPAY). Disabled gracefully if
 	// PAYMENTS_SYNC_INTERVAL unset. The SYSPRO cash-receipt poster is
 	// currently stubbed — rows stay pending until the XML builder lands
@@ -419,6 +455,12 @@ func run() error {
 		time.AfterFunc(10*time.Second, paymentsCancel)
 	}
 
+	// Drain daily report scheduler.
+	if reportCancel != nil {
+		slog.Info("draining daily report scheduler")
+		time.AfterFunc(5*time.Second, reportCancel)
+	}
+
 	// Graceful HTTP shutdown with 15s deadline.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
@@ -437,6 +479,9 @@ func run() error {
 	}
 	if paymentsCancel != nil {
 		paymentsCancel()
+	}
+	if reportCancel != nil {
+		reportCancel()
 	}
 
 	slog.Info("server stopped cleanly")

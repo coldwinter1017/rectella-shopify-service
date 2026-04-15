@@ -69,8 +69,8 @@ func TestSQLServerLister_SkipsBlankAndDedupes(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"StockCode"}).
 		AddRow("CBBQ0001").
 		AddRow(" CBBQ0001 "). // duplicate with whitespace
-		AddRow("").            // blank
-		AddRow("   ").         // whitespace only
+		AddRow("").           // blank
+		AddRow("   ").        // whitespace only
 		AddRow("CBBQ0002")
 	mock.ExpectQuery("SELECT StockCode FROM bq_WEBS_Whs_QoH WHERE StockCode IS NOT NULL").
 		WillReturnRows(rows)

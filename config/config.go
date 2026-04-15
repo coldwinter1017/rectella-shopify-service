@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -43,6 +44,17 @@ type Config struct {
 	// list (Sarah's view `bq_WEBS_Whs_QoH` on RIL-DB01). Empty = disabled,
 	// the syncer falls through to Shopify-first lister then the static slice.
 	SQLServerDSN string
+
+	// Daily cash-receipt email to credit control. Disabled unless all
+	// of SMTP_HOST/PORT/FROM and CREDIT_CONTROL_TO are set.
+	SMTPHost        string
+	SMTPPort        int
+	SMTPUsername    string
+	SMTPPassword    string
+	SMTPFrom        string
+	SMTPUseTLS      bool
+	CreditControlTo []string
+	DailyReportHour int // UTC, default 7
 }
 
 func Load() (*Config, error) {
@@ -150,6 +162,39 @@ func Load() (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid duration for PAYMENTS_SYNC_INTERVAL: %w", err)
 		}
+	}
+
+	// Daily cash-receipt email config. All-or-nothing: if any SMTP
+	// field is set but not all, we still load — the daily report
+	// wiring in main.go enables the job only when the full set is
+	// present.
+	c.SMTPHost = os.Getenv("SMTP_HOST")
+	if p := os.Getenv("SMTP_PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil {
+			c.SMTPPort = n
+		} else {
+			return nil, fmt.Errorf("invalid SMTP_PORT: %q", p)
+		}
+	}
+	c.SMTPUsername = os.Getenv("SMTP_USERNAME")
+	c.SMTPPassword = checkPlaceholder("SMTP_PASSWORD", os.Getenv("SMTP_PASSWORD"))
+	c.SMTPFrom = os.Getenv("SMTP_FROM")
+	c.SMTPUseTLS = os.Getenv("SMTP_USE_TLS") == "true"
+	if raw := os.Getenv("CREDIT_CONTROL_TO"); raw != "" {
+		for _, s := range strings.Split(raw, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				c.CreditControlTo = append(c.CreditControlTo, s)
+			}
+		}
+	}
+	c.DailyReportHour = 7
+	if h := os.Getenv("DAILY_REPORT_HOUR"); h != "" {
+		n, err := strconv.Atoi(h)
+		if err != nil || n < 0 || n > 23 {
+			return nil, fmt.Errorf("invalid DAILY_REPORT_HOUR: %q", h)
+		}
+		c.DailyReportHour = n
 	}
 
 	c.LogLevel, err = parseLogLevel(os.Getenv("LOG_LEVEL"))

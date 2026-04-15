@@ -283,19 +283,32 @@ func TestQueryStock_Success(t *testing.T) {
 	}
 }
 
-func TestQueryStock_PartialFailure(t *testing.T) {
+// TestQueryStock_MissingWarehousePushesZero verifies Sarah's rule: when a
+// stock code exists in SYSPRO but isn't stocked on the target warehouse,
+// we treat it as 0 qty on hand. Downstream the syncer pushes that 0 to
+// Shopify, so customers see the item as out of stock and can't order what
+// WEBS can't ship. This is deliberately distinct from a query/parse error,
+// which should leave the SKU OUT of the result map so Shopify keeps its
+// last-known level (avoids a false-zero during a SYSPRO outage).
+func TestQueryStock_MissingWarehousePushesZero(t *testing.T) {
 	fake := newFakeEnet(t)
 	fake.queryResponses["MBBQ0159"] = sampleINVQRYResponse
+	// MBBQ0160 is NOT in queryResponses, so the fake returns an InvQuery
+	// with no WarehouseItem — i.e. SYSPRO knows the stock code but it
+	// doesn't live on the filter warehouse.
 	c := fake.client(t)
 	result, err := c.QueryStock(context.Background(), []string{"MBBQ0159", "MBBQ0160"}, "BURN")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result) != 1 {
-		t.Fatalf("expected 1 result (partial), got %d", len(result))
+	if len(result) != 2 {
+		t.Fatalf("expected 2 results (MBBQ0159 + MBBQ0160=0), got %d", len(result))
 	}
 	if result["MBBQ0159"] != 75.0 {
 		t.Errorf("MBBQ0159: expected 75.0, got %f", result["MBBQ0159"])
+	}
+	if result["MBBQ0160"] != 0.0 {
+		t.Errorf("MBBQ0160: expected 0.0 (missing-from-warehouse rule), got %f", result["MBBQ0160"])
 	}
 }
 

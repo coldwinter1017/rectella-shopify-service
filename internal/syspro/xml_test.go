@@ -229,6 +229,144 @@ func TestBuildSORTOI_DataXML_NoFreightWhenZero(t *testing.T) {
 	}
 }
 
+// TestBuildSORTOI_DataXML_StripsVATWhenInclusive verifies Sarah's VAT fix:
+// when Shopify's raw payload has taxes_included=true, buildSORTOI must
+// subtract the per-line tax from the unit price before emitting <Price>.
+// Shopify sends £8.00 gross with £1.33 VAT baked in; SYSPRO's exclusive
+// tax code will add VAT back on top of the net figure we send.
+func TestBuildSORTOI_DataXML_StripsVATWhenInclusive(t *testing.T) {
+	order := minimalOrder()
+	order.RawPayload = []byte(`{"taxes_included":true}`)
+	lines := []model.OrderLine{
+		// £8 gross, £1.33 VAT → £6.67 net
+		{SKU: "BRIQ0152", Quantity: 1, UnitPrice: 8.00, Tax: 1.33},
+	}
+
+	_, dataXML, err := buildSORTOI(order, lines, "WEBS", "A")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(dataXML, "<Price>6.67</Price>") {
+		t.Errorf("expected <Price>6.67</Price> (8.00 - 1.33 VAT); got: %s", dataXML)
+	}
+	if strings.Contains(dataXML, "<Price>8</Price>") {
+		t.Errorf("data XML should NOT contain gross price 8; got: %s", dataXML)
+	}
+}
+
+// TestBuildSORTOI_DataXML_PreservesNetWhenExclusive verifies the inverse:
+// when taxes_included=false the line_items[].price is already net, so we
+// must NOT strip VAT (would produce a negative result). This is the
+// API-draft-order path that tolerates our existing test debris.
+func TestBuildSORTOI_DataXML_PreservesNetWhenExclusive(t *testing.T) {
+	order := minimalOrder()
+	order.RawPayload = []byte(`{"taxes_included":false}`)
+	lines := []model.OrderLine{
+		{SKU: "BRIQ0152", Quantity: 1, UnitPrice: 8.00, Tax: 1.60},
+	}
+
+	_, dataXML, err := buildSORTOI(order, lines, "WEBS", "A")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(dataXML, "<Price>8</Price>") {
+		t.Errorf("expected <Price>8</Price> (price already net, no strip); got: %s", dataXML)
+	}
+}
+
+// TestBuildSORTOI_DataXML_StripsFreightVAT verifies freight VAT is stripped
+// the same way as line prices when taxes_included=true.
+func TestBuildSORTOI_DataXML_StripsFreightVAT(t *testing.T) {
+	order := minimalOrder()
+	order.ShippingAmount = 5.99
+	order.RawPayload = []byte(`{
+		"taxes_included": true,
+		"shipping_lines": [
+			{"tax_lines": [{"price": "1.00"}]}
+		]
+	}`)
+	lines := []model.OrderLine{
+		{SKU: "BRIQ0152", Quantity: 1, UnitPrice: 8.00, Tax: 1.33},
+	}
+
+	_, dataXML, err := buildSORTOI(order, lines, "WEBS", "A")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(dataXML, "<FreightValue>4.99</FreightValue>") {
+		t.Errorf("expected <FreightValue>4.99</FreightValue> (5.99 - 1.00 VAT); got: %s", dataXML)
+	}
+	if !strings.Contains(dataXML, "<FreightCost>4.99</FreightCost>") {
+		t.Errorf("expected <FreightCost>4.99</FreightCost>; got: %s", dataXML)
+	}
+}
+
+// TestBuildSORTOI_DataXML_NonTaxableUnchanged verifies that when
+// taxes_included=true but a specific line has Tax=0 (zero-rated item),
+// the unit price is NOT modified — avoids false stripping of exempt lines.
+func TestBuildSORTOI_DataXML_NonTaxableUnchanged(t *testing.T) {
+	order := minimalOrder()
+	order.RawPayload = []byte(`{"taxes_included":true}`)
+	lines := []model.OrderLine{
+		{SKU: "EXEMPT0001", Quantity: 2, UnitPrice: 15.00, Tax: 0},
+	}
+
+	_, dataXML, err := buildSORTOI(order, lines, "WEBS", "A")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(dataXML, "<Price>15</Price>") {
+		t.Errorf("expected <Price>15</Price> (tax=0, no strip); got: %s", dataXML)
+	}
+}
+
+// TestBuildSORTOI_DataXML_MixedTaxableAndExempt verifies that on a single
+// order with both a VAT-bearing line and a zero-rated line, each line is
+// treated independently.
+func TestBuildSORTOI_DataXML_MixedTaxableAndExempt(t *testing.T) {
+	order := minimalOrder()
+	order.RawPayload = []byte(`{"taxes_included":true}`)
+	lines := []model.OrderLine{
+		{SKU: "BRIQ0152", Quantity: 1, UnitPrice: 8.00, Tax: 1.33}, // taxable
+		{SKU: "EXEMPT0001", Quantity: 1, UnitPrice: 15.00, Tax: 0}, // zero-rated
+	}
+
+	_, dataXML, err := buildSORTOI(order, lines, "WEBS", "A")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Taxable line stripped
+	if !strings.Contains(dataXML, "<Price>6.67</Price>") {
+		t.Errorf("expected <Price>6.67</Price> for taxable line; got: %s", dataXML)
+	}
+	// Zero-rated line untouched
+	if !strings.Contains(dataXML, "<Price>15</Price>") {
+		t.Errorf("expected <Price>15</Price> for zero-rated line; got: %s", dataXML)
+	}
+}
+
+// TestExtractTaxesIncluded_MalformedPayload verifies the helper is
+// defensive against malformed JSON — returning false is the safe default
+// (preserves existing behaviour for any edge case).
+func TestExtractTaxesIncluded_MalformedPayload(t *testing.T) {
+	cases := [][]byte{
+		nil,
+		[]byte(""),
+		[]byte("{"),
+		[]byte(`{"taxes_included":"not-a-bool"}`),
+	}
+	for _, c := range cases {
+		if extractTaxesIncluded(c) {
+			t.Errorf("expected false for malformed payload %q, got true", string(c))
+		}
+	}
+}
+
 // TestBuildSORTOI_TruncatesLongFields verifies that customer data exceeding
 // SYSPRO SORTOI field length limits is silently truncated to the maximum,
 // rather than being sent as-is and rejected by SYSPRO. This protects against

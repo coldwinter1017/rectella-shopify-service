@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"strconv"
 
 	"github.com/trismegistus0/rectella-shopify-service/internal/model"
 )
@@ -144,6 +145,55 @@ func extractShippingInstrs(rawPayload []byte) (title string, code string) {
 	return title, code
 }
 
+// extractTaxesIncluded returns the order-level `taxes_included` flag from the
+// raw Shopify webhook payload. When true, line_items[].price is gross (VAT
+// baked in) and we must strip VAT before emitting <Price> to SORTOI — SYSPRO's
+// WEBS stock items have exclusive tax codes, so sending gross would cause
+// SYSPRO to double-charge VAT. Returns false if the payload can't be parsed
+// or the field is missing — leaving prices untouched, which is the safer
+// default for the rare exclusive-pricing case.
+func extractTaxesIncluded(rawPayload []byte) bool {
+	if len(rawPayload) == 0 {
+		return false
+	}
+	var p struct {
+		TaxesIncluded bool `json:"taxes_included"`
+	}
+	if err := json.Unmarshal(rawPayload, &p); err != nil {
+		return false
+	}
+	return p.TaxesIncluded
+}
+
+// extractShippingTax sums tax_lines[].price across all shipping_lines in the
+// raw Shopify payload. Used to strip VAT from the freight line when the order
+// is VAT-inclusive. Returns 0 if no shipping lines, no tax lines, or parse
+// failure — all safe defaults (no strip).
+func extractShippingTax(rawPayload []byte) float64 {
+	if len(rawPayload) == 0 {
+		return 0
+	}
+	var p struct {
+		ShippingLines []struct {
+			TaxLines []struct {
+				Price string `json:"price"`
+			} `json:"tax_lines"`
+		} `json:"shipping_lines"`
+	}
+	if err := json.Unmarshal(rawPayload, &p); err != nil {
+		return 0
+	}
+	var total float64
+	for _, sl := range p.ShippingLines {
+		for _, tl := range sl.TaxLines {
+			if v, err := strconv.ParseFloat(tl.Price, 64); err == nil {
+				total += v
+			}
+		}
+	}
+	return total
+}
+
 // SYSPRO ShippingInstrs XSD limits (from sales-orders-reference-guide).
 const (
 	maxShippingInstrs    = 30
@@ -177,12 +227,22 @@ func buildSORTOI(order model.Order, lines []model.OrderLine, warehouse, allocati
 		return "", "", fmt.Errorf("marshalling SORTOI params: %w", err)
 	}
 
+	// Shopify sends line_items[].price VAT-inclusive when taxes_included=true.
+	// SYSPRO's WEBS stock items have exclusive tax codes, so sending gross
+	// makes SYSPRO double-charge VAT. Strip per-line VAT when the payload
+	// says prices are inclusive. Absolute subtraction (Shopify already gave
+	// us the tax amount per line) avoids rounding drift from rate-based math.
+	taxesIncluded := extractTaxesIncluded(order.RawPayload)
+
 	stockLines := make([]sortoiStockLine, len(lines))
 	for i, l := range lines {
 		// Net price: subtract per-unit discount (Shopify sends total discount across all units).
 		netPrice := l.UnitPrice
 		if l.Discount > 0 && l.Quantity > 0 {
 			netPrice -= l.Discount / float64(l.Quantity)
+		}
+		if taxesIncluded && l.Tax > 0 && l.Quantity > 0 {
+			netPrice -= l.Tax / float64(l.Quantity)
 		}
 		stockLines[i] = sortoiStockLine{
 			CustomerPoLine: fmt.Sprintf("%04d", i+1),
@@ -200,9 +260,16 @@ func buildSORTOI(order model.Order, lines []model.OrderLine, warehouse, allocati
 
 	details := sortoiDetail{Lines: stockLines}
 	if order.ShippingAmount > 0 {
+		// Same VAT strip applies to freight — Shopify's shipping_lines[].price
+		// is gross when taxes_included=true. Subtract the shipping tax total
+		// so SYSPRO can add its own VAT back via the freight tax code.
+		freightNet := order.ShippingAmount
+		if taxesIncluded {
+			freightNet -= extractShippingTax(order.RawPayload)
+		}
 		details.FreightLine = &sortoiFreightLine{
-			FreightValue: order.ShippingAmount,
-			FreightCost:  order.ShippingAmount,
+			FreightValue: freightNet,
+			FreightCost:  freightNet,
 		}
 	}
 

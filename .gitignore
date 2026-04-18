@@ -5,12 +5,18 @@
 *.so
 *.dylib
 /rectella-shopify-service
+/rectella-service
 /pipeline-test
 /benchmark
 /enettest
 /sorqrytest
 /sortoitest
 /sku-parity
+/arspaytest
+/invbrwtest
+
+# Root-level screenshots (Playwright testing evidence, kept local only)
+/*.png
 
 # Test
 *.test

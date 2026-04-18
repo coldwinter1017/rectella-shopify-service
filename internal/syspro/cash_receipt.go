@@ -182,13 +182,13 @@ func (r CashReceipt) validate() error {
 	case r.CustomerCode == "":
 		return errors.New("CustomerCode required")
 	case r.Bank == "":
-		return errors.New("Bank (cashbook code) required")
+		return errors.New("bank (cashbook code) required")
 	case r.PaymentType == "":
 		return errors.New("PaymentType required")
 	case r.InvoiceNumber == "":
 		return errors.New("InvoiceNumber required")
 	case r.Amount <= 0:
-		return fmt.Errorf("Amount must be positive, got %.2f", r.Amount)
+		return fmt.Errorf("amount must be positive, got %.2f", r.Amount)
 	case r.PostedAt.IsZero():
 		return errors.New("PostedAt required")
 	}

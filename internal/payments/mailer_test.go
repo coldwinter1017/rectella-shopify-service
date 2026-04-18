@@ -66,7 +66,7 @@ func (s *mockSMTPServer) handle(conn net.Conn) {
 	defer conn.Close()
 	br := bufio.NewReader(conn)
 	writeLine := func(line string) {
-		io.WriteString(conn, line+"\r\n")
+		_, _ = io.WriteString(conn, line+"\r\n")
 	}
 	writeLine("220 mock.smtp ready")
 
@@ -125,7 +125,7 @@ func (s *mockSMTPServer) handle(conn net.Conn) {
 }
 
 func (s *mockSMTPServer) close() {
-	s.listener.Close()
+	_ = s.listener.Close()
 	s.wg.Wait()
 }
 

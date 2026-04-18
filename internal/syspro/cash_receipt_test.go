@@ -131,11 +131,11 @@ func TestBuildARSTPYData_ValidationErrors(t *testing.T) {
 		want string
 	}{
 		{"missing customer", func(r *CashReceipt) { r.CustomerCode = "" }, "CustomerCode required"},
-		{"missing bank", func(r *CashReceipt) { r.Bank = "" }, "Bank"},
+		{"missing bank", func(r *CashReceipt) { r.Bank = "" }, "bank"},
 		{"missing payment type", func(r *CashReceipt) { r.PaymentType = "" }, "PaymentType required"},
 		{"missing reference", func(r *CashReceipt) { r.InvoiceNumber = "" }, "InvoiceNumber required"},
-		{"zero amount", func(r *CashReceipt) { r.Amount = 0 }, "Amount must be positive"},
-		{"negative amount", func(r *CashReceipt) { r.Amount = -1 }, "Amount must be positive"},
+		{"zero amount", func(r *CashReceipt) { r.Amount = 0 }, "amount must be positive"},
+		{"negative amount", func(r *CashReceipt) { r.Amount = -1 }, "amount must be positive"},
 		{"zero PostedAt", func(r *CashReceipt) { r.PostedAt = time.Time{} }, "PostedAt required"},
 	}
 	for _, tc := range cases {

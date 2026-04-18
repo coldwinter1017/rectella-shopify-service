@@ -76,7 +76,7 @@ func (l *SQLServerLister) ListAllSKUs(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying sqlserver: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	seen := make(map[string]struct{})
 	out := make([]string, 0, 64)

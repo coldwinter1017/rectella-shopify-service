@@ -74,10 +74,10 @@ func (m *Mailer) Send(ctx context.Context, to []string, subject, textBody string
 	_ = conn.SetDeadline(deadline)
 	client, err := smtp.NewClient(conn, m.cfg.Host)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("smtp handshake: %w", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if m.cfg.UseTLS {
 		tlsCfg := &tls.Config{ServerName: m.cfg.Host, MinVersion: tls.VersionTLS12}

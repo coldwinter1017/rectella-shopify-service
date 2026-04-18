@@ -55,7 +55,6 @@ func (s *fakeStore) MarkPaymentFailed(ctx context.Context, id int64, msg string)
 }
 
 type fakePoster struct {
-	refByID  map[int64]string
 	err      error
 	received []syspro.CashReceipt
 }

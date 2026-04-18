@@ -1,0 +1,14 @@
+[Unit]
+Description=Rectella Shopify Service
+After=docker.service rectella-vpn.service
+Wants=docker.service rectella-vpn.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/bast/brain/projects/code/rectella-shopify-service
+ExecStart=/home/bast/brain/projects/code/rectella-shopify-service/scripts/run.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

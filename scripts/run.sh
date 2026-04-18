@@ -29,5 +29,8 @@ else
   exit 1
 fi
 
+echo "Building service..."
+go build -o ./rectella-service ./cmd/server || exit 1
+
 echo "Starting service..."
-exec go run ./cmd/server
+exec ./rectella-service

@@ -1,0 +1,6 @@
+[Unit]
+Description=Rectella PostgreSQL backup
+
+[Service]
+Type=oneshot
+ExecStart=/home/bast/brain/projects/code/rectella-shopify-service/scripts/backup.sh

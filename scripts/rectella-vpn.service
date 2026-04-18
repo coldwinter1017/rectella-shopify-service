@@ -1,0 +1,15 @@
+[Unit]
+Description=Rectella VPN (openconnect)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/bast/brain/projects/code/rectella-shopify-service
+ExecStart=/home/bast/brain/projects/code/rectella-shopify-service/scripts/vpn-daemon.sh
+ExecStopPost=/home/bast/brain/projects/code/rectella-shopify-service/scripts/vpn.sh down
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

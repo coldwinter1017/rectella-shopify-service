@@ -105,6 +105,21 @@ func (h *Handler) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Financial-status gate: only paid orders reach SYSPRO. Protects against
+	// pay-later / manual-payment gateways shipping unpaid inventory. We ACK
+	// (200) so Shopify doesn't retry — if the order is later paid, Shopify
+	// fires orders/create again or ops re-triggers via the retry endpoint.
+	if !isPaidStatus(payload.FinancialStatus) {
+		h.logger.Info("skipping unpaid order",
+			"webhook_id", webhookID,
+			"shopify_order_id", payload.ID,
+			"order_number", payload.Name,
+			"financial_status", payload.FinancialStatus,
+		)
+		h.respond(w, http.StatusOK, "status", "skipped_unpaid")
+		return
+	}
+
 	// Validate line items.
 	for i, li := range payload.LineItems {
 		if li.SKU == "" {
@@ -140,6 +155,15 @@ func (h *Handler) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 			h.respond(w, http.StatusOK, "status", "ok")
 			return
 		}
+		if errors.Is(err, store.ErrDuplicateOrder) {
+			h.logger.Info("duplicate shopify order ignored",
+				"webhook_id", webhookID,
+				"shopify_order_id", payload.ID,
+				"order_number", payload.Name,
+			)
+			h.respond(w, http.StatusOK, "status", "duplicate_order")
+			return
+		}
 		h.logger.Error("persisting order", "error", err, "webhook_id", webhookID)
 		h.respond(w, http.StatusInternalServerError, "error", "internal error")
 		return
@@ -161,6 +185,20 @@ func (h *Handler) handleOrderCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.respond(w, http.StatusOK, "status", "ok")
+}
+
+// isPaidStatus returns true for Shopify financial_status values that mean the
+// customer's money has been captured. "paid" is the happy path; "partially_paid"
+// is accepted because the captured portion is real revenue and the line items
+// are committed. Everything else (pending, authorized, voided, refunded,
+// partially_refunded, unpaid, expired, empty) is rejected at the gate.
+func isPaidStatus(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "paid", "partially_paid":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) respond(w http.ResponseWriter, status int, key, value string) {

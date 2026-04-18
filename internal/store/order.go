@@ -4,14 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
-	"github.com/trismegistus0/rectella-shopify-service/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/trismegistus0/rectella-shopify-service/internal/model"
 )
 
 // ErrDuplicateWebhook is returned when a webhook event has already been recorded.
 var ErrDuplicateWebhook = errors.New("duplicate webhook")
+
+// ErrDuplicateOrder is returned when an orders row with the same shopify_order_id
+// already exists. Different from ErrDuplicateWebhook (which fires on webhook_id
+// replay): this catches the case where Shopify delivers a fresh webhook for an
+// order we've already persisted (customer edit, Shopify retry under new webhook
+// id, "Send test notification" replay). The handler treats this as a no-op 200
+// so Shopify stops retrying.
+var ErrDuplicateOrder = errors.New("duplicate shopify order id")
 
 // WebhookExists checks whether a webhook event with the given ID has already been stored.
 func (db *DB) WebhookExists(ctx context.Context, webhookID string) (bool, error) {
@@ -24,6 +33,72 @@ func (db *DB) WebhookExists(ctx context.Context, webhookID string) (bool, error)
 		return false, fmt.Errorf("checking webhook existence: %w", err)
 	}
 	return exists, nil
+}
+
+// ErrOrderNotFound is returned when a lookup by shopify_order_id finds
+// no matching row. Callers that expect the order to exist should treat
+// this as a distinct case from a DB error.
+var ErrOrderNotFound = errors.New("order not found")
+
+// GetOrderByShopifyID returns the stored order row matching the given
+// Shopify order ID. Used by the cancellation webhook handler to check
+// whether we have a local record (and thus a syspro_order_number) to
+// classify against. Returns ErrOrderNotFound if no row matches.
+func (db *DB) GetOrderByShopifyID(ctx context.Context, shopifyOrderID int64) (*model.Order, error) {
+	var o model.Order
+	err := db.Pool.QueryRow(ctx, `
+		SELECT id, shopify_order_id, order_number, status, customer_account,
+		       ship_first_name, ship_last_name, ship_address1, ship_address2,
+		       ship_city, ship_province, ship_postcode, ship_country,
+		       ship_phone, ship_email,
+		       payment_reference, payment_amount,
+		       COALESCE(syspro_order_number, ''),
+		       attempts, COALESCE(last_error, ''),
+		       order_date, created_at, updated_at
+		FROM orders
+		WHERE shopify_order_id = $1
+	`, shopifyOrderID).Scan(
+		&o.ID, &o.ShopifyOrderID, &o.OrderNumber, &o.Status, &o.CustomerAccount,
+		&o.ShipFirstName, &o.ShipLastName, &o.ShipAddress1, &o.ShipAddress2,
+		&o.ShipCity, &o.ShipProvince, &o.ShipPostcode, &o.ShipCountry,
+		&o.ShipPhone, &o.ShipEmail,
+		&o.PaymentReference, &o.PaymentAmount,
+		&o.SysproOrderNumber,
+		&o.Attempts, &o.LastError,
+		&o.OrderDate, &o.CreatedAt, &o.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrOrderNotFound
+		}
+		return nil, fmt.Errorf("fetching order by shopify_order_id: %w", err)
+	}
+	return &o, nil
+}
+
+// ShopifyOrdersExist returns the subset of Shopify order IDs already persisted.
+// Used by the reconciliation sweeper to find gaps in webhook delivery.
+func (db *DB) ShopifyOrdersExist(ctx context.Context, shopifyOrderIDs []int64) (map[int64]bool, error) {
+	existing := make(map[int64]bool, len(shopifyOrderIDs))
+	if len(shopifyOrderIDs) == 0 {
+		return existing, nil
+	}
+	rows, err := db.Pool.Query(ctx,
+		`SELECT shopify_order_id FROM orders WHERE shopify_order_id = ANY($1)`,
+		shopifyOrderIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying existing shopify order ids: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning shopify order id: %w", err)
+		}
+		existing[id] = true
+	}
+	return existing, rows.Err()
 }
 
 // CreateOrder persists a webhook event, order, and its line items in a single transaction.
@@ -74,6 +149,10 @@ func (db *DB) CreateOrder(ctx context.Context, event model.WebhookEvent, order m
 		order.RawPayload, order.OrderDate,
 	).Scan(&orderID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrDuplicateOrder
+		}
 		return fmt.Errorf("inserting order: %w", err)
 	}
 
@@ -104,6 +183,31 @@ func (db *DB) CreateOrder(ctx context.Context, event model.WebhookEvent, order m
 	}
 
 	return nil
+}
+
+// ResetStaleProcessing flips orders stuck in 'processing' for longer than
+// olderThan back to 'pending' and bumps their attempts counter. Intended to
+// be called once on service boot, before the batch processor starts.
+//
+// An order reaches 'processing' via MarkOrderProcessing and is expected to
+// leave it within a few seconds (success -> 'submitted', business error ->
+// 'failed', infra error -> 'pending'). If the service is killed between the
+// MarkOrderProcessing Exec and the terminal Update, the row is left stuck
+// forever. This guard makes shutdown safe-by-default: on next boot those
+// rows are retried via the normal batch path.
+//
+// Returns the number of rows reset.
+func (db *DB) ResetStaleProcessing(ctx context.Context, olderThan time.Duration) (int, error) {
+	tag, err := db.Pool.Exec(ctx,
+		`UPDATE orders
+		 SET status = 'pending', attempts = attempts + 1, updated_at = NOW()
+		 WHERE status = 'processing' AND updated_at < NOW() - $1::interval`,
+		fmt.Sprintf("%d seconds", int(olderThan.Seconds())),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("resetting stale processing orders: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // MarkOrderProcessing atomically transitions an order from 'pending' to 'processing'.

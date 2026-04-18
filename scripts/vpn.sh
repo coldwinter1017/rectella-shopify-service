@@ -204,13 +204,15 @@ vpn_test() {
 }
 
 case "${1:-}" in
-  up)        vpn_up ;;
-  down)      vpn_down ;;
-  status)    vpn_status ;;
-  test)      vpn_test ;;
-  fix-hosts) fix_hosts ;;
+  up)           vpn_up ;;
+  down)         vpn_down ;;
+  status)       vpn_status ;;
+  test)         vpn_test ;;
+  fix-hosts)    fix_hosts ;;
+  fix-dns)      fix_dns ;;
+  post-connect) fix_dns; fix_hosts ;;
   *)
-    echo "Usage: ./scripts/vpn.sh up|down|status|test"
+    echo "Usage: ./scripts/vpn.sh up|down|status|test|fix-dns|fix-hosts|post-connect"
     exit 1
     ;;
 esac

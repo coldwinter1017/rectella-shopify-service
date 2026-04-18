@@ -17,6 +17,8 @@ import (
 	"github.com/trismegistus0/rectella-shopify-service/internal/fulfilment"
 	"github.com/trismegistus0/rectella-shopify-service/internal/inventory"
 	"github.com/trismegistus0/rectella-shopify-service/internal/model"
+	"github.com/trismegistus0/rectella-shopify-service/internal/payments"
+	"github.com/trismegistus0/rectella-shopify-service/internal/reconcile"
 	"github.com/trismegistus0/rectella-shopify-service/internal/store"
 	"github.com/trismegistus0/rectella-shopify-service/internal/syspro"
 	"github.com/trismegistus0/rectella-shopify-service/internal/webhook"
@@ -57,6 +59,10 @@ func run() error {
 		"log_level", cfg.LogLevel.String(),
 	)
 
+	if cfg.AdminToken == "" {
+		slog.Warn("ADMIN_TOKEN is empty — admin endpoints (/orders, /orders/{id}/retry) are UNAUTHENTICATED")
+	}
+
 	// Connect to database.
 	db, err := store.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -68,6 +74,16 @@ func run() error {
 	// Run migrations.
 	if err := store.Migrate(ctx, db); err != nil {
 		return fmt.Errorf("running migrations: %w", err)
+	}
+
+	// Reset stale 'processing' orders. An order only reaches processing
+	// between MarkOrderProcessing and the terminal status update; if the
+	// service was killed in that window, the row is stuck. Boot-time sweep
+	// flips anything older than 10 minutes back to pending for retry.
+	if reset, err := db.ResetStaleProcessing(ctx, 10*time.Minute); err != nil {
+		slog.Warn("failed to reset stale processing orders", "error", err)
+	} else if reset > 0 {
+		slog.Info("reset stale processing orders", "count", reset)
 	}
 
 	// Set up HTTP routes.
@@ -90,55 +106,91 @@ func run() error {
 	})
 
 	// Instantiate SYSPRO e.net client.
+	taxCodeMap := syspro.ParseTaxCodeMap(cfg.SysproTaxCodeMap)
 	sysproClient := syspro.NewEnetClient(
 		cfg.SysproEnetURL,
 		cfg.SysproOperator,
 		cfg.SysproPassword,
 		cfg.SysproCompanyID,
+		cfg.SysproCompanyPassword,
+		cfg.SysproWarehouse,
+		cfg.SysproAllocationAction,
+		taxCodeMap,
 		logger,
 	)
 
-	// Set up stock sync (disabled gracefully if SYSPRO_SKUS is empty).
+	// Set up stock sync. Two modes:
+	//   - dynamic:  SYSPRO_SKUS empty, SYSPRO_WAREHOUSE set → discover the
+	//               SKU list from Shopify productVariants on each cycle
+	//   - static:   SYSPRO_SKUS non-empty → sync exactly those SKUs
+	// Either mode needs SHOPIFY_ACCESS_TOKEN + SYSPRO_WAREHOUSE.
 	triggerCh := make(chan struct{}, 1)
 	var syncCancel context.CancelFunc
 
-	if len(cfg.SysproSKUs) > 0 {
-		if cfg.ShopifyAccessToken == "" {
-			slog.Warn("SYSPRO_SKUS configured but SHOPIFY_ACCESS_TOKEN missing, stock sync disabled")
-		} else if cfg.SysproWarehouse == "" {
-			slog.Warn("SYSPRO_SKUS configured but SYSPRO_WAREHOUSE missing, stock sync disabled")
-		} else {
-			var invOpts []inventory.ShopifyOption
-			if cfg.ShopifyBaseURL != "" {
-				invOpts = append(invOpts, inventory.WithBaseURL(cfg.ShopifyBaseURL))
-			}
-			shopifyClient := inventory.NewShopifyClient(
-				cfg.ShopifyStoreURL,
-				cfg.ShopifyAccessToken,
-				cfg.ShopifyLocationID,
-				cfg.SysproSKUs,
-				logger,
-				invOpts...,
-			)
-
-			syncer := inventory.NewSyncer(
-				sysproClient, // *EnetClient satisfies InventoryQuerier
-				shopifyClient,
-				db,
-				cfg.StockSyncInterval,
-				cfg.SysproWarehouse,
-				cfg.SysproSKUs,
-				triggerCh,
-				logger,
-			)
-
-			var syncCtx context.Context
-			syncCtx, syncCancel = context.WithCancel(ctx)
-			defer syncCancel()
-			go syncer.Run(syncCtx)
+	switch {
+	case cfg.ShopifyAccessToken == "":
+		slog.Warn("stock sync disabled: SHOPIFY_ACCESS_TOKEN missing")
+	case cfg.SysproWarehouse == "":
+		slog.Warn("stock sync disabled: SYSPRO_WAREHOUSE missing")
+	default:
+		var invOpts []inventory.ShopifyOption
+		if cfg.ShopifyBaseURL != "" {
+			invOpts = append(invOpts, inventory.WithBaseURL(cfg.ShopifyBaseURL))
 		}
-	} else {
-		slog.Warn("SYSPRO_SKUS not configured, stock sync disabled")
+		shopifyClient := inventory.NewShopifyClient(
+			cfg.ShopifyStoreURL,
+			cfg.ShopifyAccessToken,
+			cfg.ShopifyLocationID,
+			cfg.SysproSKUs,
+			logger,
+			invOpts...,
+		)
+
+		// Lister precedence: SQL Server (Sarah's WEBS warehouse view) →
+		// Shopify (productVariants pagination) → static slice from env.
+		var lister inventory.SKULister
+		listerMode := "static"
+		if cfg.SQLServerDSN != "" {
+			sqlLister, err := inventory.NewSQLServerLister(cfg.SQLServerDSN, logger)
+			if err != nil {
+				slog.Warn("sql server lister init failed, falling back", "error", err)
+			} else if sqlLister != nil {
+				if err := sqlLister.Ping(ctx); err != nil {
+					slog.Warn("sql server lister ping failed, falling back", "error", err)
+					_ = sqlLister.Close()
+				} else {
+					lister = sqlLister
+					listerMode = "sql"
+					defer sqlLister.Close() //nolint:errcheck // best-effort close at shutdown
+				}
+			}
+		}
+		if lister == nil && len(cfg.SysproSKUs) == 0 {
+			lister = shopifyClient
+			listerMode = "shopify"
+		}
+		slog.Info("stock sync enabled",
+			"mode", listerMode,
+			"warehouse", cfg.SysproWarehouse,
+			"static_sku_count", len(cfg.SysproSKUs),
+		)
+
+		syncer := inventory.NewSyncer(
+			sysproClient, // *EnetClient satisfies InventoryQuerier
+			shopifyClient,
+			db,
+			lister,
+			cfg.StockSyncInterval,
+			cfg.SysproWarehouse,
+			cfg.SysproSKUs,
+			triggerCh,
+			logger,
+		)
+
+		var syncCtx context.Context
+		syncCtx, syncCancel = context.WithCancel(ctx)
+		defer syncCancel()
+		go syncer.Run(syncCtx)
 	}
 
 	// Start batch processor.
@@ -146,6 +198,90 @@ func run() error {
 	batchCtx, batchCancel := context.WithCancel(ctx)
 	defer batchCancel()
 	go batchProc.Run(batchCtx)
+
+	// Start reconciliation sweeper (catches orders missed by webhook delivery).
+	// Disabled gracefully if ShopifyAccessToken or ReconciliationInterval unset.
+	var reconcileCancel context.CancelFunc
+	if cfg.ReconciliationInterval > 0 {
+		sw := reconcile.New(db, cfg.ShopifyStoreURL, cfg.ShopifyAccessToken, cfg.ReconciliationInterval, logger)
+		if sw != nil {
+			var reconcileCtx context.Context
+			reconcileCtx, reconcileCancel = context.WithCancel(ctx)
+			defer reconcileCancel()
+			go sw.Run(reconcileCtx)
+		}
+	} else {
+		slog.Info("reconciliation sweep disabled (RECONCILIATION_INTERVAL unset)")
+	}
+
+	// Start daily cash-receipt email reporter. Disabled gracefully
+	// unless SMTP config + recipients are all present. This exists as
+	// the MVP stopgap while ARSPAY automation is blocked on Sarah's
+	// spec + Liz's sign-off — credit control still gets a daily CSV.
+	var reportCancel context.CancelFunc
+	if cfg.SMTPHost != "" && cfg.SMTPPort != 0 && cfg.SMTPFrom != "" && len(cfg.CreditControlTo) > 0 && cfg.ShopifyAccessToken != "" {
+		mailer := payments.NewMailer(payments.MailerConfig{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+			UseTLS:   cfg.SMTPUseTLS,
+		})
+		fetcher := payments.NewTransactionsFetcher(cfg.ShopifyStoreURL, cfg.ShopifyAccessToken, logger)
+		reporter, err := payments.NewDailyReporter(payments.DailyReporterConfig{
+			Source:     fetcher,
+			Mailer:     mailer,
+			Recipients: cfg.CreditControlTo,
+			StoreName:  cfg.ShopifyStoreURL,
+			Hour:       cfg.DailyReportHour,
+			Logger:     logger,
+		})
+		if err != nil {
+			slog.Warn("daily report disabled", "error", err)
+		} else {
+			var reportCtx context.Context
+			reportCtx, reportCancel = context.WithCancel(ctx)
+			defer reportCancel()
+			go reporter.Run(reportCtx)
+			slog.Info("daily report enabled", "hour_utc", cfg.DailyReportHour, "recipients", len(cfg.CreditControlTo))
+		}
+	} else {
+		slog.Info("daily report disabled (SMTP or CREDIT_CONTROL_TO not configured)")
+	}
+
+	// Start payments syncer (ARSTPY cash receipts). Requires all three:
+	// PAYMENTS_SYNC_INTERVAL, ARSPAY_CASH_BOOK, ARSPAY_PAYMENT_TYPE.
+	// Disabled gracefully (no error) if any are missing — protects the
+	// live service from booting with half-configured payment posting.
+	var paymentsCancel context.CancelFunc
+	switch {
+	case cfg.PaymentsSyncInterval == 0:
+		slog.Info("payments sync disabled (PAYMENTS_SYNC_INTERVAL unset)")
+	case cfg.ArspayCashBook == "":
+		slog.Warn("payments sync disabled (ARSPAY_CASH_BOOK unset — required when PAYMENTS_SYNC_INTERVAL is set)")
+	case cfg.ArspayPaymentType == "":
+		slog.Warn("payments sync disabled (ARSPAY_PAYMENT_TYPE unset — required when PAYMENTS_SYNC_INTERVAL is set)")
+	default:
+		paymentsSyncer := payments.NewSyncer(payments.SyncerConfig{
+			Store:       db,
+			Poster:      sysproClient,
+			Interval:    cfg.PaymentsSyncInterval,
+			Customer:    "WEBS01",
+			Bank:        cfg.ArspayCashBook,
+			PaymentType: cfg.ArspayPaymentType,
+			Logger:      logger,
+		})
+		var paymentsCtx context.Context
+		paymentsCtx, paymentsCancel = context.WithCancel(ctx)
+		defer paymentsCancel()
+		go paymentsSyncer.Run(paymentsCtx)
+		slog.Info("payments sync enabled",
+			"interval", cfg.PaymentsSyncInterval,
+			"cashbook", cfg.ArspayCashBook,
+			"payment_type", cfg.ArspayPaymentType,
+		)
+	}
 
 	// Start fulfilment syncer (disabled if SHOPIFY_ACCESS_TOKEN missing).
 	var fulfilmentCancel context.CancelFunc
@@ -178,6 +314,11 @@ func run() error {
 	// Register webhook handlers.
 	wh := webhook.NewHandler(db, cfg.ShopifyWebhookSecret, triggerCh, logger)
 	wh.Register(mux)
+
+	// Cancellation webhook — classify-only gate, no SYSPRO mutation.
+	// Shares the HMAC secret with orders/create.
+	cancelHandler := webhook.NewCancelHandler(db, sysproClient, cfg.ShopifyWebhookSecret, logger)
+	cancelHandler.Register(mux)
 
 	// Admin auth check for operations endpoints.
 	requireAdmin := func(next http.HandlerFunc) http.HandlerFunc {
@@ -288,11 +429,12 @@ func run() error {
 	handler = panicRecovery(handler)
 
 	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              ":" + cfg.Port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Start server in a goroutine.
@@ -334,6 +476,18 @@ func run() error {
 		time.AfterFunc(10*time.Second, fulfilmentCancel)
 	}
 
+	// Drain payments syncer.
+	if paymentsCancel != nil {
+		slog.Info("draining payments syncer (10s grace period)")
+		time.AfterFunc(10*time.Second, paymentsCancel)
+	}
+
+	// Drain daily report scheduler.
+	if reportCancel != nil {
+		slog.Info("draining daily report scheduler")
+		time.AfterFunc(5*time.Second, reportCancel)
+	}
+
 	// Graceful HTTP shutdown with 15s deadline.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
@@ -349,6 +503,12 @@ func run() error {
 	}
 	if fulfilmentCancel != nil {
 		fulfilmentCancel()
+	}
+	if paymentsCancel != nil {
+		paymentsCancel()
+	}
+	if reportCancel != nil {
+		reportCancel()
 	}
 
 	slog.Info("server stopped cleanly")

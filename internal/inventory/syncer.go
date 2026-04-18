@@ -23,14 +23,24 @@ type ReservationStore interface {
 	FetchReservedQuantities(ctx context.Context) (map[string]int, error)
 }
 
+// SKULister discovers the authoritative list of SKUs to sync on each cycle.
+// Implemented by the Shopify client (productVariants GraphQL pagination),
+// because SYSPRO 8 e.net has no stock-code-list business object and Shopify
+// is the natural source of truth for "what's sellable". When the lister is
+// nil the syncer falls back to the static `skus` slice passed at construction.
+type SKULister interface {
+	ListAllSKUs(ctx context.Context) ([]string, error)
+}
+
 // Syncer orchestrates one-way stock sync from SYSPRO to Shopify.
 type Syncer struct {
 	querier   InventoryQuerier
 	pusher    InventoryPusher
 	store     ReservationStore
+	lister    SKULister // nil = static mode, use skus slice instead
 	interval  time.Duration
 	warehouse string
-	skus      []string
+	skus      []string // static fallback when lister is nil OR lister returns empty
 	triggerCh <-chan struct{}
 	logger    *slog.Logger
 
@@ -40,10 +50,15 @@ type Syncer struct {
 	consecutiveFailures int
 }
 
+// NewSyncer constructs a stock syncer. When lister is non-nil the syncer
+// operates in dynamic mode: each cycle fetches the current SKU list from
+// the lister (Shopify productVariants) and runs INVQRY per SKU. When lister
+// is nil it falls back to the static skus slice.
 func NewSyncer(
 	querier InventoryQuerier,
 	pusher InventoryPusher,
 	store ReservationStore,
+	lister SKULister,
 	interval time.Duration,
 	warehouse string,
 	skus []string,
@@ -54,6 +69,7 @@ func NewSyncer(
 		querier:   querier,
 		pusher:    pusher,
 		store:     store,
+		lister:    lister,
 		interval:  interval,
 		warehouse: warehouse,
 		skus:      skus,
@@ -64,7 +80,16 @@ func NewSyncer(
 
 // Run starts the polling loop. Blocks until ctx is cancelled.
 func (s *Syncer) Run(ctx context.Context) {
-	s.logger.Info("stock sync started", "interval", s.interval, "skus", len(s.skus))
+	mode := "static"
+	if s.lister != nil {
+		mode = "dynamic"
+	}
+	s.logger.Info("stock sync started",
+		"interval", s.interval,
+		"mode", mode,
+		"static_skus", len(s.skus),
+		"warehouse", s.warehouse,
+	)
 
 	// First tick at T+0.
 	s.tick(ctx)
@@ -120,9 +145,39 @@ func (s *Syncer) triggeredTick(ctx context.Context) {
 	s.triggeredSync(syncCtx)
 }
 
+// resolveSKUs returns the list of SKUs to sync this cycle. Dynamic mode
+// calls the lister (Shopify) and falls back to the static slice if the
+// lister fails or returns empty. Static mode always uses the slice.
+func (s *Syncer) resolveSKUs(ctx context.Context) []string {
+	if s.lister == nil {
+		return s.skus
+	}
+	skus, err := s.lister.ListAllSKUs(ctx)
+	if err != nil {
+		s.logger.Warn("stock list discovery failed, falling back to static SKU list",
+			"error", err,
+			"static_count", len(s.skus),
+		)
+		return s.skus
+	}
+	if len(skus) == 0 {
+		s.logger.Warn("stock list discovery returned no SKUs, falling back to static list",
+			"static_count", len(s.skus),
+		)
+		return s.skus
+	}
+	s.logger.Info("stock list refreshed", "warehouse", s.warehouse, "count", len(skus))
+	return skus
+}
+
 func (s *Syncer) fullSync(ctx context.Context) {
 	start := time.Now()
-	stock, err := s.querier.QueryStock(ctx, s.skus, s.warehouse)
+	skus := s.resolveSKUs(ctx)
+	if len(skus) == 0 {
+		s.logger.Warn("stock sync skipped: no SKUs to sync (dynamic discovery empty and no static fallback)")
+		return
+	}
+	stock, err := s.querier.QueryStock(ctx, skus, s.warehouse)
 	if err != nil {
 		s.mu.Lock()
 		s.consecutiveFailures++
@@ -152,8 +207,9 @@ func (s *Syncer) fullSync(ctx context.Context) {
 		return
 	}
 	s.logger.Info("stock sync complete",
+		"skus_discovered", len(skus),
 		"skus_updated", len(quantities),
-		"skus_skipped", len(s.skus)-len(quantities),
+		"skus_skipped", len(skus)-len(quantities),
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 }

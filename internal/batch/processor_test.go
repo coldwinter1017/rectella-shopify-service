@@ -71,14 +71,18 @@ func (m *mockStore) UpdateOrderSubmitted(ctx context.Context, orderID int64, sys
 
 // mockSession implements syspro.Session for testing.
 type mockSession struct {
-	results []syspro.SalesOrderResult
-	errs    []error
-	call    int
-	closed  bool
+	results      []syspro.SalesOrderResult
+	errs         []error
+	call         int
+	closed       bool
+	beforeSubmit func(callIndex int) // hook for drain/cancellation tests
 }
 
 func (s *mockSession) SubmitOrder(ctx context.Context, order model.Order, lines []model.OrderLine) (*syspro.SalesOrderResult, error) {
 	i := s.call
+	if s.beforeSubmit != nil {
+		s.beforeSubmit(i)
+	}
 	s.call++
 	if i < len(s.errs) && s.errs[i] != nil {
 		return nil, s.errs[i]
@@ -131,6 +135,42 @@ func makeOrder(id int64, attempts int) model.OrderWithLines {
 		Lines: []model.OrderLine{
 			{SKU: "CBBQ0001", Quantity: 1, UnitPrice: 99.99},
 		},
+	}
+}
+
+// TestProcessBatch_HonoursContextBetweenOrders verifies the drain invariant:
+// when the batch context is cancelled mid-loop (e.g. SIGTERM during shutdown),
+// the processor must stop starting new orders. The current in-flight SORTOI
+// call is allowed to complete so we never leave an order ambiguously
+// "processing" with no terminal status transition.
+func TestProcessBatch_HonoursContextBetweenOrders(t *testing.T) {
+	orders := []model.OrderWithLines{makeOrder(1, 0), makeOrder(2, 0), makeOrder(3, 0)}
+	ms := &mockStore{orders: orders}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel as soon as the first SubmitOrder call starts. The first call
+	// completes (simulating a SORTOI round-trip we can't abort), but the
+	// batch must NOT start order 2 or order 3.
+	session := &mockSession{
+		beforeSubmit: func(callIndex int) {
+			if callIndex == 0 {
+				cancel()
+			}
+		},
+	}
+	mc := &mockClient{session: session}
+	p := New(ms, mc, time.Minute, testLogger())
+
+	_ = p.ProcessBatch(ctx)
+
+	if session.call != 1 {
+		t.Errorf("SubmitOrder called %d times, want 1 (orders 2 and 3 must be skipped after cancellation)", session.call)
+	}
+
+	terminalUpdates := len(ms.submitted) + len(ms.updates)
+	if terminalUpdates != 1 {
+		t.Errorf("expected 1 terminal status update (for order 1), got %d (submitted=%d updates=%d)",
+			terminalUpdates, len(ms.submitted), len(ms.updates))
 	}
 }
 

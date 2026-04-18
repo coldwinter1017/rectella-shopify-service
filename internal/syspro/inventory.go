@@ -114,7 +114,14 @@ func (c *EnetClient) QueryStock(ctx context.Context, skus []string, warehouse st
 			}
 		}
 		if found == nil {
-			c.logger.Warn("stock code not found in warehouse", "sku", sku, "warehouse", warehouse)
+			// Stock code exists in SYSPRO but isn't stocked on this warehouse.
+			// Sarah's rule: treat as 0 qty on hand so Shopify shows the item
+			// as out of stock and customers can't order what WEBS can't ship.
+			// Deliberately different from a query/parse error (which would
+			// leave the SKU out of the result map entirely, preserving the
+			// last-known Shopify level).
+			c.logger.Info("stock code not stocked on warehouse — pushing 0", "sku", sku, "warehouse", warehouse)
+			result[sku] = 0
 			continue
 		}
 		qty, err := strconv.ParseFloat(strings.TrimSpace(found.AvailableQty), 64)

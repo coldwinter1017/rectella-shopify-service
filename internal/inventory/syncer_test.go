@@ -55,6 +55,24 @@ type mockReservationStore struct {
 	calls    int
 }
 
+// mockLister simulates Shopify-driven dynamic SKU discovery.
+type mockLister struct {
+	mu    sync.Mutex
+	skus  []string
+	err   error
+	calls int
+}
+
+func (m *mockLister) ListAllSKUs(ctx context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.skus, nil
+}
+
 func (m *mockReservationStore) FetchReservedQuantities(ctx context.Context) (map[string]int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -73,7 +91,7 @@ func TestSyncer_FullSync_ComputesEffectiveQuantity(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 120.0, "CBBQ0002": 50.0}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{"CBBQ0001": 3}}
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001", "CBBQ0002"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001", "CBBQ0002"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.pushCalls != 1 {
@@ -91,7 +109,7 @@ func TestSyncer_FullSync_ClampsNegatives(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 2.0}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{"CBBQ0001": 5}}
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.lastPush["CBBQ0001"] != 0 {
@@ -103,7 +121,7 @@ func TestSyncer_FullSync_SysproFailure_NoPush(t *testing.T) {
 	q := &mockQuerier{err: fmt.Errorf("syspro logon failed")}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{}}
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.pushCalls != 0 {
@@ -115,7 +133,7 @@ func TestSyncer_FullSync_PartialSysproData(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 100.0}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{}}
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001", "CBBQ0002"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001", "CBBQ0002"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.pushCalls != 1 {
@@ -130,7 +148,7 @@ func TestSyncer_TriggeredSync_UsesCachedSyspro(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 100.0}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{"CBBQ0001": 2}}
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	initialQueryCalls := q.calls
@@ -147,7 +165,7 @@ func TestSyncer_TriggeredSync_ColdCache_NoPush(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{}}
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.triggeredSync(context.Background())
 	if p.pushCalls != 0 {
@@ -159,7 +177,7 @@ func TestSyncer_Run_StopsOnContextCancel(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{}}
-	syncer := NewSyncer(q, p, s, 50*time.Millisecond, "WH01", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, 50*time.Millisecond, "WH01", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -180,7 +198,7 @@ func TestSyncer_ConsecutiveFailures(t *testing.T) {
 	q := &mockQuerier{err: fmt.Errorf("syspro down")}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{}}
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	syncer.fullSync(context.Background())
@@ -200,7 +218,7 @@ func TestSyncer_ReservationStoreError_StillPushes(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 100.0}}
 	p := &mockPusher{}
 	s := &mockReservationStore{err: fmt.Errorf("db connection lost")}
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.pushCalls != 1 {
@@ -216,7 +234,7 @@ func TestSyncer_Debounce_CoalescesMultipleSignals(t *testing.T) {
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{}}
 	triggerCh := make(chan struct{}, 1)
-	syncer := NewSyncer(q, p, s, time.Hour, "WH01", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "WH01", []string{"CBBQ0001"},
 		triggerCh, syncerLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -251,7 +269,7 @@ func TestComputeEffective_RealWorldQuantities(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 0.0}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{}}
-	syncer := NewSyncer(q, p, s, time.Hour, "BURN", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "BURN", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.pushCalls != 1 {
@@ -268,7 +286,7 @@ func TestComputeEffective_WithReservedOrders(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 10.0}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{"CBBQ0001": 6}}
-	syncer := NewSyncer(q, p, s, time.Hour, "BURN", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "BURN", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.pushCalls != 1 {
@@ -284,7 +302,7 @@ func TestComputeEffective_ReservedExceedsAvailable(t *testing.T) {
 	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 8.0}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{"CBBQ0001": 15}}
-	syncer := NewSyncer(q, p, s, time.Hour, "BURN", []string{"CBBQ0001"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "BURN", []string{"CBBQ0001"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.pushCalls != 1 {
@@ -309,7 +327,7 @@ func TestComputeEffective_MultiSKU(t *testing.T) {
 		"CBBQ0001": 3,
 		"CBBQ0004": 10, // exceeds available — should clamp
 	}}
-	syncer := NewSyncer(q, p, s, time.Hour, "BURN",
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "BURN",
 		[]string{"CBBQ0001", "CBBQ0002", "CBBQ0003", "CBBQ0004"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
@@ -337,7 +355,7 @@ func TestComputeEffective_NoReservations(t *testing.T) {
 	}}
 	p := &mockPusher{}
 	s := &mockReservationStore{reserved: map[string]int{}}
-	syncer := NewSyncer(q, p, s, time.Hour, "BURN", []string{"CBBQ0001", "CBBQ0002"},
+	syncer := NewSyncer(q, p, s, nil, time.Hour, "BURN", []string{"CBBQ0001", "CBBQ0002"},
 		make(chan struct{}, 1), syncerLogger())
 	syncer.fullSync(context.Background())
 	if p.pushCalls != 1 {
@@ -348,5 +366,70 @@ func TestComputeEffective_NoReservations(t *testing.T) {
 	}
 	if p.lastPush["CBBQ0002"] != 120 {
 		t.Errorf("CBBQ0002: expected 120, got %d", p.lastPush["CBBQ0002"])
+	}
+}
+
+// TestSyncer_DynamicMode_UsesListerSKUs verifies the syncer calls the lister
+// on each cycle and passes the discovered SKUs to QueryStock (NOT the static
+// slice). This is the Shopify-first dynamic discovery path.
+func TestSyncer_DynamicMode_UsesListerSKUs(t *testing.T) {
+	q := &mockQuerier{stock: map[string]float64{
+		"LUMP0148":  138.0,
+		"CBBQ0001":  42.0,
+		"KAMA0012":  5.0,
+	}}
+	p := &mockPusher{}
+	s := &mockReservationStore{reserved: map[string]int{}}
+	// Static fallback has ONE stock code; dynamic lister has THREE.
+	// Assertion: the syncer must use the lister's three, not the static one.
+	l := &mockLister{skus: []string{"LUMP0148", "CBBQ0001", "KAMA0012"}}
+	syncer := NewSyncer(q, p, s, l, time.Hour, "WEBS",
+		[]string{"STATIC_FALLBACK_SHOULD_NOT_BE_USED"},
+		make(chan struct{}, 1), syncerLogger())
+
+	syncer.fullSync(context.Background())
+
+	if l.calls != 1 {
+		t.Errorf("expected 1 lister call, got %d", l.calls)
+	}
+	if p.pushCalls != 1 {
+		t.Fatalf("expected 1 push, got %d", p.pushCalls)
+	}
+	if len(p.lastPush) != 3 {
+		t.Fatalf("expected 3 SKUs pushed, got %d (%v)", len(p.lastPush), p.lastPush)
+	}
+	for _, expected := range []string{"LUMP0148", "CBBQ0001", "KAMA0012"} {
+		if _, ok := p.lastPush[expected]; !ok {
+			t.Errorf("expected %q in push, missing", expected)
+		}
+	}
+	if _, ok := p.lastPush["STATIC_FALLBACK_SHOULD_NOT_BE_USED"]; ok {
+		t.Error("static fallback was used when lister was available")
+	}
+}
+
+// TestSyncer_DynamicMode_FallsBackOnListerError verifies that when the
+// Shopify lister fails, the syncer falls back to the static SKU list
+// instead of skipping the cycle entirely. Gives operators a safe
+// override if Shopify is unreachable.
+func TestSyncer_DynamicMode_FallsBackOnListerError(t *testing.T) {
+	q := &mockQuerier{stock: map[string]float64{"CBBQ0001": 42.0}}
+	p := &mockPusher{}
+	s := &mockReservationStore{reserved: map[string]int{}}
+	l := &mockLister{err: fmt.Errorf("shopify timeout")}
+	syncer := NewSyncer(q, p, s, l, time.Hour, "WEBS",
+		[]string{"CBBQ0001"},
+		make(chan struct{}, 1), syncerLogger())
+
+	syncer.fullSync(context.Background())
+
+	if l.calls != 1 {
+		t.Errorf("expected 1 lister call, got %d", l.calls)
+	}
+	if p.pushCalls != 1 {
+		t.Fatalf("expected 1 push via static fallback, got %d", p.pushCalls)
+	}
+	if p.lastPush["CBBQ0001"] != 42 {
+		t.Errorf("expected CBBQ0001=42 from static fallback, got %d", p.lastPush["CBBQ0001"])
 	}
 }

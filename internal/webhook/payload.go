@@ -9,11 +9,16 @@ type shopifyOrder struct {
 	Email               string                `json:"email"`
 	CreatedAt           string                `json:"created_at"`
 	TotalPrice          string                `json:"total_price"`
+	FinancialStatus     string                `json:"financial_status"`
 	Gateway             string                `json:"gateway"`
 	PaymentGatewayNames []string              `json:"payment_gateway_names"`
 	ShippingAddress     *shopifyAddress       `json:"shipping_address"`
 	LineItems           []shopifyLineItem     `json:"line_items"`
 	ShippingLines       []shopifyShippingLine `json:"shipping_lines"`
+	// Populated only by orders/cancelled webhooks. Both are absent/empty on
+	// orders/create.
+	CancelledAt  *string `json:"cancelled_at"`
+	CancelReason string  `json:"cancel_reason"`
 }
 
 type shopifyShippingLine struct {

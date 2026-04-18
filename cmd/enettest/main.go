@@ -31,6 +31,7 @@ func run() error {
 	operator := requireEnv("SYSPRO_OPERATOR")
 	password := os.Getenv("SYSPRO_PASSWORD") // blank password is valid
 	companyID := requireEnv("SYSPRO_COMPANY_ID")
+	companyPassword := os.Getenv("SYSPRO_COMPANY_PASSWORD") // blank valid for companies without one
 
 	baseURL = strings.TrimRight(baseURL, "/")
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -43,7 +44,7 @@ func run() error {
 
 	// Step 1: Logon
 	fmt.Print("Logon... ")
-	guid, err := logon(ctx, client, baseURL, operator, password, companyID)
+	guid, err := logon(ctx, client, baseURL, operator, password, companyID, companyPassword)
 	if err != nil {
 		return fmt.Errorf("logon failed: %w", err)
 	}
@@ -61,11 +62,12 @@ func run() error {
 	return nil
 }
 
-func logon(ctx context.Context, client *http.Client, baseURL, operator, password, companyID string) (string, error) {
+func logon(ctx context.Context, client *http.Client, baseURL, operator, password, companyID, companyPassword string) (string, error) {
 	params := url.Values{
 		"Operator":         {operator},
 		"OperatorPassword": {password},
 		"CompanyId":        {companyID},
+		"CompanyPassword":  {companyPassword},
 	}
 	body, err := doGet(ctx, client, baseURL+"/Logon", params)
 	if err != nil {
@@ -77,6 +79,9 @@ func logon(ctx context.Context, client *http.Client, baseURL, operator, password
 	}
 	if guid == "" {
 		return "", fmt.Errorf("logon returned empty GUID (body: %s)", string(body))
+	}
+	if strings.HasPrefix(guid, "ERROR") {
+		return "", fmt.Errorf("logon rejected by SYSPRO: %s", guid)
 	}
 	return guid, nil
 }

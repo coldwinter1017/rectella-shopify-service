@@ -104,6 +104,15 @@ func (p *Processor) ProcessBatch(ctx context.Context) error {
 	}()
 
 	for _, ow := range orders {
+		// Honour shutdown signals between orders. If the context has been
+		// cancelled (e.g. SIGTERM during graceful drain), stop starting new
+		// SORTOI calls. The currently-in-flight call is allowed to complete
+		// so we never leave an order ambiguously "processing" with no
+		// terminal status transition.
+		if ctx.Err() != nil {
+			p.logger.Info("batch draining on context cancellation", "remaining", len(orders))
+			break
+		}
 		if err := p.submitOrder(ctx, session, ow); err != nil {
 			p.logger.Warn("batch stopped on infra error",
 				"order_id", ow.Order.ID,
@@ -192,12 +201,24 @@ func (p *Processor) submitOrder(ctx context.Context, session syspro.Session, ow 
 		)
 	}
 
-	p.logger.Info("order submitted to SYSPRO",
-		"order_id", order.ID,
-		"shopify_order_id", order.ShopifyOrderID,
-		"order_number", order.OrderNumber,
-		"syspro_order", result.SysproOrderNumber,
-	)
+	// Clean-import responses (no warnings) don't include a <SalesOrder> element,
+	// so SysproOrderNumber is empty. The order IS created in SYSPRO but we lose
+	// traceability for reconciliation and fulfilment sync. Log WARN so ops can
+	// reconcile manually; long-term fix is a post-submit query by CustomerPoNumber.
+	if result.SysproOrderNumber == "" {
+		p.logger.Warn("order submitted to SYSPRO without traceable number (clean import)",
+			"order_id", order.ID,
+			"shopify_order_id", order.ShopifyOrderID,
+			"order_number", order.OrderNumber,
+		)
+	} else {
+		p.logger.Info("order submitted to SYSPRO",
+			"order_id", order.ID,
+			"shopify_order_id", order.ShopifyOrderID,
+			"order_number", order.OrderNumber,
+			"syspro_order", result.SysproOrderNumber,
+		)
+	}
 
 	return nil
 }

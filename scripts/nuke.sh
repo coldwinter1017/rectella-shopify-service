@@ -5,6 +5,13 @@
 
 cd "$(dirname "$0")/.." || exit 1
 
+echo "WARNING: This will DESTROY all PostgreSQL data (orders, webhooks, everything)."
+read -rp "Type 'yes' to confirm: " confirm
+if [[ $confirm != "yes" ]]; then
+  echo "Aborted."
+  exit 1
+fi
+
 echo "Destroying PostgreSQL volume..."
 docker compose down -v
 

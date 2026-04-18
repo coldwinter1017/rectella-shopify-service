@@ -182,6 +182,36 @@ func TestSyncer_NonDispatched_Skipped(t *testing.T) {
 	}
 }
 
+// TestSyncer_CancelledOrder_Skipped verifies the SYSPRO cancellation status
+// "\\" is NOT treated as dispatch-complete. A cancelled SYSPRO order must
+// never create a Shopify fulfilment. Regression guard for scenario R from
+// the overnight plan.
+func TestSyncer_CancelledOrder_Skipped(t *testing.T) {
+	q := &mockDispatchQuerier{
+		results: map[string]syspro.SORQRYResult{
+			"015562": {SalesOrder: "015562", OrderStatus: "\\"}, // cancelled per CLAUDE.md
+		},
+	}
+	p := &mockFulfilmentPusher{}
+	s := &mockFulfilmentStore{
+		orders: []model.Order{
+			{ID: 1, ShopifyOrderID: 1001, SysproOrderNumber: "015562", Status: model.OrderStatusSubmitted},
+		},
+	}
+	syncer := NewFulfilmentSyncer(q, p, s, time.Hour, testLogger())
+	syncer.processOrders(context.Background())
+
+	if p.getCalls != 0 {
+		t.Errorf("expected no GetFulfillmentOrderID calls for cancelled order, got %d", p.getCalls)
+	}
+	if p.createCalls != 0 {
+		t.Errorf("expected no CreateFulfillment calls for cancelled order, got %d", p.createCalls)
+	}
+	if s.updateCalls != 0 {
+		t.Errorf("expected no DB updates, got %d", s.updateCalls)
+	}
+}
+
 func TestSyncer_SORQRYFailure_NoFulfilments(t *testing.T) {
 	q := &mockDispatchQuerier{err: fmt.Errorf("syspro logon failed")}
 	p := &mockFulfilmentPusher{}

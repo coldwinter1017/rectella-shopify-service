@@ -63,6 +63,7 @@ var validPayload = `{
 	"email": "john@example.com",
 	"created_at": "2026-02-24T14:30:00Z",
 	"total_price": "748.00",
+	"financial_status": "paid",
 	"gateway": "shopify_payments",
 	"shipping_address": {
 		"first_name": "John",
@@ -99,6 +100,7 @@ var noAddressPayload = `{
 	"email": "john@example.com",
 	"created_at": "2026-02-24T14:30:00Z",
 	"total_price": "599.00",
+	"financial_status": "paid",
 	"gateway": "shopify_payments",
 	"shipping_address": null,
 	"line_items": [
@@ -257,6 +259,23 @@ func TestHandleOrderCreate(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			// Defect K: Shopify delivers the same shopify_order_id under a
+			// fresh webhook_id (customer edit replay, Send test notification
+			// replay, or transient-error retry). Before the fix this returned
+			// 500 and Shopify would retry for 48h then drop. Now returns 200
+			// so Shopify stops retrying.
+			name:      "duplicate shopify_order_id under fresh webhook id",
+			body:      validPayload,
+			webhookID: "wh-dup-order",
+			signBody:  true,
+			store: &mockStore{
+				createOrderFn: func(ctx context.Context, event model.WebhookEvent, order model.Order, lines []model.OrderLine) error {
+					return store.ErrDuplicateOrder
+				},
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
 			name: "order with shipping lines",
 			body: `{
 				"id": 5551234567891,
@@ -264,6 +283,7 @@ func TestHandleOrderCreate(t *testing.T) {
 				"email": "test@example.com",
 				"created_at": "2026-02-24T14:30:00Z",
 				"total_price": "604.99",
+				"financial_status": "paid",
 				"gateway": "shopify_payments",
 				"line_items": [
 					{"sku": "CBBQ0001", "quantity": 1, "price": "599.00", "total_discount": "0.00", "tax_lines": []}
@@ -282,6 +302,46 @@ func TestHandleOrderCreate(t *testing.T) {
 					t.Errorf("ShippingAmount = %f, want 5.99", order.ShippingAmount)
 				}
 			},
+		},
+		{
+			name: "unpaid order skipped",
+			body: `{
+				"id": 5551234567892,
+				"name": "#BBQ1011",
+				"email": "test@example.com",
+				"created_at": "2026-02-24T14:30:00Z",
+				"total_price": "10.00",
+				"financial_status": "pending",
+				"gateway": "bank_deposit",
+				"line_items": [
+					{"sku": "CBBQ0001", "quantity": 1, "price": "10.00", "total_discount": "0.00", "tax_lines": []}
+				]
+			}`,
+			webhookID:      "wh-unpaid",
+			signBody:       true,
+			store:          &mockStore{},
+			wantStatus:     http.StatusOK,
+			wantCreateCall: false,
+		},
+		{
+			name: "partially paid order accepted",
+			body: `{
+				"id": 5551234567893,
+				"name": "#BBQ1012",
+				"email": "test@example.com",
+				"created_at": "2026-02-24T14:30:00Z",
+				"total_price": "10.00",
+				"financial_status": "partially_paid",
+				"gateway": "shopify_payments",
+				"line_items": [
+					{"sku": "CBBQ0001", "quantity": 1, "price": "10.00", "total_discount": "0.00", "tax_lines": []}
+				]
+			}`,
+			webhookID:      "wh-partial",
+			signBody:       true,
+			store:          &mockStore{},
+			wantStatus:     http.StatusOK,
+			wantCreateCall: true,
 		},
 		{
 			name:           "nil shipping address",

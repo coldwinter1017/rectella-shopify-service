@@ -29,6 +29,10 @@ func BuildCSV(date time.Time, txns []ShopifyTransaction) ([]byte, error) {
 	})
 
 	var buf bytes.Buffer
+	// UTF-8 BOM so Excel renders the £ glyphs correctly. Without this
+	// the body bytes (£ = 0xC2 0xA3 in UTF-8) get decoded as Windows-1252
+	// and show up as "Â£".
+	buf.Write([]byte{0xEF, 0xBB, 0xBF})
 	w := csv.NewWriter(&buf)
 	header := []string{
 		"Shopify Reference",

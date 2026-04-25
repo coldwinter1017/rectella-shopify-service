@@ -13,6 +13,8 @@ func TestBuildCSV_Empty(t *testing.T) {
 		t.Fatalf("BuildCSV: %v", err)
 	}
 	got := string(out)
+	// Strip the leading UTF-8 BOM so the header check matches Sarah's spec.
+	got = strings.TrimPrefix(got, string([]byte{0xEF, 0xBB, 0xBF}))
 	if !strings.HasPrefix(got, "Shopify Reference,Order Value,Charges,Receipt Value") {
 		t.Errorf("missing or wrong header (per Sarah's spec), got: %q", got)
 	}

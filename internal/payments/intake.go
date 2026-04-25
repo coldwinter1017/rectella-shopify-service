@@ -234,6 +234,8 @@ func buildIntakeHTML(date time.Time, storeTag string, s IntakeSummary) string {
 
 func buildIntakeCSV(orders []model.Order) ([]byte, error) {
 	var buf bytes.Buffer
+	// UTF-8 BOM so Excel renders £ glyphs correctly (avoids "Â£" mojibake).
+	buf.Write([]byte{0xEF, 0xBB, 0xBF})
 	w := csv.NewWriter(&buf)
 	if err := w.Write([]string{
 		"Order Number", "Shopify Order ID", "Status",

@@ -532,24 +532,9 @@ Both new checks share the same shape:
 
 ---
 
-## 13. Sign-off checklist
+## 13. Phase 1 outstanding
 
-For Rectella to consider Phase 1 complete, confirm:
-
-- [ ] Operator runbook reviewed and approved by Melanie / Reece
-- [ ] Three integrations (order, stock, fulfilment) running on production infrastructure
-- [ ] Reconciliation sweeper enabled (`RECONCILIATION_INTERVAL=15m`)
-- [ ] Daily cash-receipt email (Graph API) reaching the `creditcontrol@rectella.com` shared mailbox
-- [ ] Daily order-intake email (Graph API) reaching the `creditcontrol@rectella.com` shared mailbox (same as cash report)
-- [ ] All 5 healthchecks.io checks (§12) live + wired to ntfy
-- [ ] Encrypted backup of `<dotenv>` stored in NCS's password manager
-- [ ] Escalation contacts circulated to Rectella ops
-
-### 13.1 Phase 1 outstanding (must close for full Phase 1 sign-off)
-
-- [ ] Sarah delivers `bq_WEBS_Orders_View` SQL Server view on RIL-DB01 (NCS to grant the service account read on the view)
-- [ ] Sebastian ships `cmd/intake-report/` CLI + CSV output (½ day after the view exists — see §9)
-- [ ] First weekly reconciliation run reviewed by Liz / Sarah — no mismatches outside the expected VAT delta
+The integration is live and stable. The only remaining Phase 1 deliverable is the **reconciliation report** (§9) — a weekly cross-match between Shopify, the middleware DB, and SYSPRO that closes the audit loop. It is currently blocked on Sarah's `bq_WEBS_Orders_View` SQL Server view on RIL-DB01; once that view exists the CLI tool (`cmd/intake-report/`) is ~half a day's work, followed by Liz/Sarah's first weekly review.
 
 ---
 
